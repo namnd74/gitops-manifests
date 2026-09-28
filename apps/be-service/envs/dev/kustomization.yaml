@@ -41,4 +41,4 @@ patches:
 
 images:
   - name: ghcr.io/namnd74/be-service
-    newTag: sha-57d207d
+    newTag: sha-9912c6b
