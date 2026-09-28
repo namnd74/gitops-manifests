@@ -28,6 +28,19 @@ patches:
       - op: replace
         path: /spec/rules/0/host
         value: prod.local
+      - op: add
+        path: /spec/rules/-
+        value:
+          host: localhost
+          http:
+            paths:
+              - path: /prod
+                pathType: Prefix
+                backend:
+                  service:
+                    name: be-service
+                    port:
+                      number: 80
     target:
       kind: Ingress
       name: be-service
