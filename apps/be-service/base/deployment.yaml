@@ -1,0 +1,54 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: be-service
+  labels:
+    app: be-service
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: be-service
+  template:
+    metadata:
+      labels:
+        app: be-service
+    spec:
+      containers:
+        - name: app
+          image: ghcr.io/namnd74/be-service:v1.0.0
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 8080
+              name: http
+          env:
+            - name: PORT
+              value: "8080"
+            - name: APP_ENV
+              value: "base"
+            - name: DB_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: be-service-secret
+                  key: DB_PASSWORD
+                  optional: true
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: 8080
+            initialDelaySeconds: 5
+            periodSeconds: 5
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: 8080
+            initialDelaySeconds: 2
+            periodSeconds: 5
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              cpu: 200m
+              memory: 128Mi
