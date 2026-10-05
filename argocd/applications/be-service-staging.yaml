@@ -9,7 +9,7 @@ spec:
   project: default
   source:
     repoURL: https://github.com/namnd74/gitops-manifests.git
-    targetRevision: main
+    targetRevision: staging
     path: apps/be-service/envs/staging
   destination:
     server: https://kubernetes.default.svc

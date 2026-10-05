@@ -1,0 +1,45 @@
+name: Validate manifests
+on:
+  pull_request:
+  push:
+    branches: [main, dev, staging, prod]
+permissions: {contents: read}
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with: {fetch-depth: 0}
+      - name: Install pinned YAML tools
+        run: bash scripts/install-ci-tools.sh
+      - name: Validate rendered configuration
+        run: bash scripts/validate-manifests.sh
+      - name: Test lab and release behavior
+        run: python3 -m unittest discover -s scripts/tests -v
+      - uses: sigstore/cosign-installer@6e04d228eb30da1757ee4e1dd75a0ec73a653e06 # v3.1.1
+        if: github.event_name == 'pull_request' && contains(fromJSON('["dev","staging","prod"]'), github.base_ref)
+        with: {cosign-release: 'v2.6.1'}
+      - name: Validate release branch PR
+        if: github.event_name == 'pull_request' && contains(fromJSON('["dev","staging","prod"]'), github.base_ref)
+        env:
+          BASE_ENV: ${{ github.base_ref }}
+          HEAD_BRANCH: ${{ github.head_ref }}
+          GH_TOKEN: ${{ secrets.CONFIG_REPO_PAT }}
+          SOURCE_REPO: namnd74/be-service
+        run: |
+          set -euo pipefail
+          case "$BASE_ENV:$HEAD_BRANCH" in
+            dev:release-be-service-dev|dev:rollback-dev|dev:fault-dev) ;;
+            staging:dev|prod:staging|staging:rollback-staging|prod:rollback-prod) ;;
+            *) echo 'Invalid release branch pair' >&2; exit 1 ;;
+          esac
+          for file in apps/be-service/envs/*/*.yaml argocd/applications/*.yaml; do
+              if [[ ( "$HEAD_BRANCH" == "rollback-$BASE_ENV" || "$HEAD_BRANCH" == fault-dev ) && "$file" == "apps/be-service/envs/$BASE_ENV/deployment-env-patch.yaml" ]]; then continue; fi
+              git show "origin/$BASE_ENV:$file" > "$RUNNER_TEMP/target-config.yaml"
+              cmp -s "$file" "$RUNNER_TEMP/target-config.yaml" || {
+                echo "Environment configuration differs: $file" >&2; exit 1;
+              }
+          done
+          rendered=$(kustomize build "apps/be-service/envs/$BASE_ENV")
+          ref=$(yq -er 'select(.kind == "Deployment" and .metadata.name == "be-service") | .spec.template.spec.containers[0].image' <<< "$rendered")
+          bash scripts/verify-image.sh "$ref" "$SOURCE_REPO"

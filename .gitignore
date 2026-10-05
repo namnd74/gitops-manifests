@@ -1,0 +1,5 @@
+.demo/
+bin/
+coverage.out
+*.test
+__pycache__/
