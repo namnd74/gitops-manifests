@@ -6,6 +6,12 @@ metadata:
     app: be-service
 spec:
   replicas: 1
+  progressDeadlineSeconds: 60
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 0
+      maxSurge: 1
   selector:
     matchLabels:
       app: be-service
@@ -31,7 +37,11 @@ spec:
                 secretKeyRef:
                   name: be-service-secret
                   key: DB_PASSWORD
-                  optional: true
+                  optional: false
+            - name: DEMO_MODE
+              value: "false"
+            - name: DEMO_FAULT
+              value: "false"
           livenessProbe:
             httpGet:
               path: /healthz
@@ -52,3 +62,12 @@ spec:
             limits:
               cpu: 200m
               memory: 128Mi
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 10001
+            readOnlyRootFilesystem: true
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+            seccompProfile:
+              type: RuntimeDefault

@@ -6,6 +6,8 @@ resources:
   - service.yaml
   - ingress.yaml
 
-commonLabels:
-  app.kubernetes.io/part-of: gitops-demo
-  app.kubernetes.io/name: be-service
+labels:
+  - includeSelectors: true
+    pairs:
+      app.kubernetes.io/part-of: gitops-demo
+      app.kubernetes.io/name: be-service

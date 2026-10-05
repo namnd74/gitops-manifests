@@ -1,0 +1,13 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata: {name: be-service}
+spec:
+  replicas: 1
+  template:
+    spec:
+      containers:
+      - name: app
+        env:
+        - {name: APP_ENV, value: dev}
+        - {name: DEMO_MODE, value: "true"}
+        - {name: DEMO_FAULT, value: "false"}
