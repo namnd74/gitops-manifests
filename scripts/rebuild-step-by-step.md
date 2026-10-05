@@ -185,8 +185,10 @@ cho phép merge commit, chặn force push và xóa ba nhánh môi trường.
 
 BE PR#1 đã merge (eecb51b) sau quality/build/security scan PASS. Lần CI đầu
 thất bại khi cài Trivy0.63.0 do release không còn tồn tại; đã pin v0.75.0 và
-CI PR chạy lại thành công. Pipeline main run37390533546 đang phát hành image
-thật, chưa có kết quả live acceptance.
+CI PR chạy lại thành công. Pipeline main run37390533546 đã publish image và
+tạo provenance, nhưng dừng khi installer Cosign cũ không xác minh được TUF
+key; image này chưa được chấp nhận làm release. Cập nhật installer chính
+thức v4.1.2 và Cosign v3.1.3 cho backend và GitOps rồi chạy lại pipeline.
 
 Repo config vẫn chưa có CONFIG_REPO_PAT ở lần kiểm tra gần nhất. Đây là
 credential Actions riêng, không tự có sau gh auth refresh. Hoàn tất bước2
