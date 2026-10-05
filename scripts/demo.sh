@@ -52,13 +52,19 @@ case "$command" in
     [[ -z "$(git status --porcelain)" ]] || { echo 'Commit/merge and pull config changes first; working tree must be clean.' >&2; exit 1; }
     [[ "$(git rev-parse HEAD)" == "$(git ls-remote origin refs/heads/main | awk '{print $1}')" ]] || { echo 'Local HEAD must match origin/main.' >&2; exit 1; }
     bash "$ROOT/scripts/validate-manifests.sh"
-    ref=$(kustomize build apps/be-service/envs/dev | yq -er 'select(.kind == "Deployment" and .metadata.name == "be-service") | .spec.template.spec.containers[0].image')
-    bash "$ROOT/scripts/verify-image.sh" "$ref" namnd74/be-service
+    applications=()
     for env in dev staging prod; do
+        ref=$(kustomize build "apps/be-service/envs/$env" | yq -er 'select(.kind == "Deployment" and .metadata.name == "be-service") | .spec.template.spec.containers[0].image')
+        if [[ "$env" != dev && "$ref" == ghcr.io/namnd74/be-service:sha-9912c6b ]]; then
+            echo "[SKIP] $env has no promoted digest yet; run connect again after promotion"
+            continue
+        fi
+        bash "$ROOT/scripts/verify-image.sh" "$ref" namnd74/be-service
         kubeseal --context "$CONTEXT" --validate < "apps/be-service/envs/$env/sealed-secret.yaml"
+        applications+=("$ROOT/argocd/applications/be-service-$env.yaml")
     done
-    "${K[@]}" apply -f "$ROOT/argocd/applications/"
-    echo '[OK] Argo tracks GitHub; all environments auto-sync after merge. Run check dev after reconciliation.'
+    for application in "${applications[@]}"; do "${K[@]}" apply -f "$application"; done
+    echo '[OK] Verified environments track GitHub and auto-sync after merge. Run check after reconciliation.'
     ;;
  status)
     "${K[@]}" -n argocd get applications

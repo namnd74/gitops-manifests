@@ -109,8 +109,10 @@ bash scripts/demo.sh status
 bash scripts/demo.sh check dev
 ```
 
-`connect` xác thực working tree và Git head, Dev digest là artifact CI thật,
-helper verify chung đạt, ciphertext hợp lệ và Applications render được. Chờ
+`connect` xác thực working tree và Git head, kiểm tra image và ciphertext
+cho từng môi trường có digest trước khi apply bất kỳ Application nào.
+Staging/Prod còn tag bootstrap được bỏ qua; chạy lại `connect` sau khi merge
+promotion đầu tiên để tạo Application tương ứng. Chờ
 Argo reconcile; `check` phải xác minh deployment đang dùng đúng digest,
 OCI version/revision khớp `/version`, Argo Git head và pod digest.
 

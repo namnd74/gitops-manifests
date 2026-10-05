@@ -207,7 +207,9 @@ bash scripts/demo.sh check dev
 ```
 
 `connect` kiểm tra HEAD bằng remote main, manifest, image supply chain và
-Sealed Secrets trước khi apply Applications. Chờ Argo reconcile rồi chạy
+Sealed Secrets cho mọi môi trường có digest trước khi apply Applications.
+Staging/Prod còn tag bootstrap được bỏ qua; chạy lại `connect` sau khi merge
+promotion đầu tiên của từng môi trường. Chờ Argo reconcile rồi chạy
 `check dev` lại nếu rollout chưa xong. `check` đối chiếu Git revision,
 Argo Synced/Healthy, digest pod và `/version`, không chỉ HTTP 200.
 
@@ -225,12 +227,14 @@ Sau khi `check dev` đạt:
 gh workflow run promote.yaml --repo namnd74/gitops-manifests -f from=dev -f to=staging
 ```
 
-Review/merge PR, pull config main, chạy `bash scripts/demo.sh check staging`.
+Review/merge PR, pull config main, chạy `bash scripts/demo.sh connect` rồi
+`bash scripts/demo.sh check staging`.
 Khi Staging đạt, promotion `staging → prod`, review/merge và kiểm chứng Prod:
 
 ```bash
 gh workflow run promote.yaml --repo namnd74/gitops-manifests -f from=staging -f to=prod
 # Sau merge và pull main:
+bash scripts/demo.sh connect
 bash scripts/demo.sh check prod
 ```
 
