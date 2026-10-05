@@ -2,16 +2,17 @@ apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
 
 resources:
-  - deployment.yaml
-  - service.yaml
-  - ingress.yaml
+- deployment.yaml
+- service.yaml
+- ingress.yaml
 
 labels:
-  - includeSelectors: true
-    pairs:
-      app.kubernetes.io/part-of: gitops-demo
-      app.kubernetes.io/name: be-service
+- includeSelectors: true
+  pairs:
+    app.kubernetes.io/name: be-service
+    app.kubernetes.io/part-of: gitops-demo
 
 images:
-  - name: ghcr.io/namnd74/be-service
-    newTag: sha-9912c6b
+- digest: sha256:9f919a9f8409643a6069ab12575d59a942d61c9aa16735249cd156387e90a97d
+  name: ghcr.io/namnd74/be-service
+  newName: ghcr.io/namnd74/be-service
