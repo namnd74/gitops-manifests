@@ -178,6 +178,22 @@ script BE PASS; actionlint ở cả hai repo và ba overlay đều PASS. Test Gi
 thực hiện hai chu kỳ merge release, giữ đúng replica và ciphertext.
 
 Chưa có backend/Argo Applications live và chưa xác minh release CI thực tế.
-Lần kiểm tra quyền gần nhất: CLI namnd74 chưa có workflow, config repo chưa
-có CONFIG_REPO_PAT. Nhánh remote hiện vẫn chỉ main. Cần hoàn tất bước2 để
-push cấu hình mới; không tạo nhánh remote từ main cũ thiếu cấu hình.
+CLI namnd74 đã được cấp quyền workflow. Cấu hình GitOps PR#1 đã merge vào
+main (f6d9df1), ba remote branch dev/staging/prod đã tạo từ commit này và
+đều bắt buộc check validate từ GitHub Actions, áp dụng cả admin. Repo chỉ
+cho phép merge commit, chặn force push và xóa ba nhánh môi trường.
+
+BE PR#1 đã merge (eecb51b) sau quality/build/security scan PASS. Lần CI đầu
+thất bại khi cài Trivy0.63.0 do release không còn tồn tại; đã pin v0.75.0 và
+CI PR chạy lại thành công. Pipeline main run37390533546 đang phát hành image
+thật, chưa có kết quả live acceptance.
+
+Repo config vẫn chưa có CONFIG_REPO_PAT ở lần kiểm tra gần nhất. Đây là
+credential Actions riêng, không tự có sau gh auth refresh. Hoàn tất bước2
+để release PR validation và promotion có thể xác minh artifact.
+
+Links evidence:
+- Config PR: https://github.com/namnd74/gitops-manifests/pull/1
+- Backend PR: https://github.com/namnd74/be-service/pull/1
+- BE CI PR PASS: https://github.com/namnd74/be-service/actions/runs/37390284792
+- BE CI main: https://github.com/namnd74/be-service/actions/runs/37390533546
