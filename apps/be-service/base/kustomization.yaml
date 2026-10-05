@@ -11,3 +11,7 @@ labels:
     pairs:
       app.kubernetes.io/part-of: gitops-demo
       app.kubernetes.io/name: be-service
+
+images:
+  - name: ghcr.io/namnd74/be-service
+    newTag: sha-9912c6b

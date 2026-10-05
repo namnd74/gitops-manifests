@@ -1,25 +1,19 @@
-# GitOps manifests
+# GitOps manifests: ba nhánh môi trường
 
-Hướng dẫn thực hành: [dựng lại lab từng bước](scripts/rebuild-step-by-step.md),
-gồm đăng nhập GitHub và nhật ký kiểm chứng trên máy ngày 06/10/2026.
+Repo cấu hình có ba nhánh triển khai: `dev`, `staging`, `prod`. Argo CD
+`be-service-dev`, `be-service-staging`, `be-service-prod` theo dõi nhánh cùng
+tên và overlay tương ứng. `main` giữ cấu hình bootstrap và workflow mặc định.
 
-Repo cấu hình Dev/Staging/Prod. Argo CD đọc repo GitHub này để triển khai
-backend; repo không build image.
+BE CI build/scan/publish/ký một image từ `be-service/main`, rồi mở PR cập nhật
+`apps/be-service/base/kustomization.yaml` vào config `dev`. Promotion mở PR
+trực tiếp `dev → staging`, `staging → prod`; merge commit giữ lịch sử và digest,
+không rebuild. Ba overlay giữ namespace, host, replicas và secret riêng.
 
-- `apps/`: base và overlay Kustomize; image production luôn được ghim bằng
-  digest. `deployment-env-patch.yaml` chứa biến môi trường theo từng môi trường.
-- `argocd/`: Applications; cả ba môi trường bật autosync và self-heal sau khi
-  PR đã merge.
-- `.github/workflows/`: validate, promotion PR và rollback PR.
-- `setup.sh`, `scripts/`: hạ tầng lab, Sealed Secret, kiểm tra và runbook.
-
-Flow duy nhất: BE CI → GHCR → Dev PR → Argo CD → k3d. Promotion chỉ hỗ trợ
-`dev -> staging` và `staging -> prod`, giữ nguyên digest đã scan. Rollback nhận
-`env` và `revision`, mở PR phục hồi image cùng env patch từ revision tốt; Sealed
-Secret được giữ nguyên.
+- [Hướng dẫn dựng lại và demo merge release](scripts/rebuild-step-by-step.md)
+- [Runbook release, fault và rollback](scripts/demo-runbook.md)
+- [Kế hoạch chuyển sang ba nhánh](docs/superpowers/plans/2026-10-06-three-branches.md)
 
 ```bash
-bash scripts/demo.sh --help
 bash scripts/demo.sh doctor
 bash scripts/demo.sh setup
 bash scripts/demo.sh seal
@@ -28,12 +22,7 @@ bash scripts/demo.sh status
 bash scripts/demo.sh check dev
 ```
 
-Chỉ sáu lệnh demo được hỗ trợ: `doctor`, `setup`, `seal`, `connect`, `status`,
-`check`. Không có lệnh sync Prod riêng; Prod tự reconcile sau khi PR merge.
-Đọc [runbook](scripts/demo-runbook.md) để cấu hình GitHub, chạy CI, promotion,
-security gate, secret, drift và rollback. Cấu hình bootstrap hiện dùng tag
-`sha-9912c6b`, chưa phải artifact đã xác minh; remote/live acceptance chưa được
-thực hiện.
-
-Giữ các container `.demo/` cũ cho migration lab. Appendix trong runbook chỉ
-hướng dẫn xử lý sau migration và không tự động xóa chúng.
+`connect/check` đọc snapshot từ remote branch của từng môi trường. `connect`
+không tạo Application cho Staging/Prod còn bootstrap, và yêu cầu Dev có digest
+đã xác minh. Chạy lại sau promotion đầu tiên. Tag bootstrap không phải release.
+Giữ `.demo/` cũ; không tự động xóa cluster, registry, Git server hoặc backup.

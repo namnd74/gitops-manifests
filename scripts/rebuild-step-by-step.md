@@ -1,302 +1,183 @@
-# Dựng lại lab GitOps từng bước
+# Dựng lại và demo merge release qua ba nhánh
 
-Workspace: `/Volumes/MacOs/workspaces/git-ops`. Hướng dẫn thực hành ngày
-06/10/2026, giờ Việt Nam. Hai repo độc lập: `be-service` và `gitops-manifests`.
+Cập nhật 06/10/2026, giờ Việt Nam. Workspace `/Volumes/MacOs/workspaces/git-ops`.
 
-Luồng triển khai: BE CI → GHCR → PR cấu hình Dev → merge → Argo CD → k3d.
-Promotion và rollback đi qua PR; không build image local để thay thế artifact CI.
+Luồng: BE main → CI scan/publish/ký digest → PR config dev → merge dev vào
+staging → merge staging vào prod. Ba nhánh thuộc repo gitops-manifests;
+backend giữ main để build một lần. Argo theo dõi nhánh cùng tên môi trường.
 
-## 1. Kiểm tra Docker Desktop
-
-Mở Docker Desktop, chờ engine chạy rồi thực hiện:
-
-```bash
-docker context ls
-docker info --format '{{.ServerVersion}}'
-docker ps -a
-k3d cluster list
-```
-
-Chỉ tiếp tục khi `docker info` thành công. Nếu thấy lỗi socket không tồn tại:
+## 1. Docker và công cụ
 
 ```bash
 open /Applications/Docker.app
-```
-
-Chờ engine rồi kiểm tra lại. Trong Codex, Docker có thể chạy nhưng sandbox
-không truy cập được socket; cần chạy thao tác Docker ngoài sandbox bằng quyền
-của công cụ. Không reset Docker hoặc xóa dữ liệu để xử lý lỗi quyền này.
-
-## 2. Kiểm tra công cụ và GitHub
-
-```bash
+docker info --format '{{.ServerVersion}}'
 cd /Volumes/MacOs/workspaces/git-ops/gitops-manifests
-for tool in docker kubectl k3d kubeseal kustomize yq jq git gh cosign python3 openssl; do
-  command -v "$tool" || break
-done
-```
-
-Máy này thiếu `yq` và `cosign` khi bắt đầu; cài bằng Homebrew:
-
-```bash
 brew install yq cosign
-gh auth login --hostname github.com --web
-gh auth status
-bash scripts/demo.sh doctor
 ```
 
-Đăng nhập bằng tài khoản có quyền với `namnd74/be-service` và
-`namnd74/gitops-manifests`. Không đưa token hoặc plaintext secret vào Git/chat.
-Hạ tầng ở bước 3 có thể dựng trước khi đăng nhập GitHub; bước kết nối release
-vẫn cần tài khoản và artifact CI hợp lệ.
+Chờ Docker engine chạy trước khi setup. Nếu Docker hoạt động nhưng Codex
+sandbox không truy cập được socket, thao tác Docker cần chạy ngoài sandbox.
+Không reset Docker hoặc xóa dữ liệu để chữa lỗi quyền.
 
-Chi tiết thao tác đăng nhập:
+## 2. Đăng nhập và cấp quyền GitHub
 
-1. Mở ứng dụng Terminal trên Mac và chạy lệnh `gh auth login` phía trên.
-2. Nếu được hỏi giao thức Git, chọn **HTTPS**. Nếu được hỏi xác thực Git bằng
-   credential GitHub, chọn **Yes**.
-3. CLI hiển thị mã dùng một lần. Nhấn Enter để mở trình duyệt; nếu không tự
-   mở, vào `https://github.com/login/device`.
-4. Đăng nhập đúng tài khoản GitHub, nhập mã từ Terminal và chọn
-   **Authorize GitHub CLI**.
-5. Quay lại Terminal, chờ CLI hoàn tất rồi chạy `gh auth status`.
-   Chỉ tiếp tục khi lệnh xác nhận đã đăng nhập đúng tài khoản.
+```bash
+gh auth login --hostname github.com --web
+gh auth refresh --hostname github.com --scopes workflow
+gh auth status
+```
 
-## 3. Dựng Kubernetes và các controller
+Chọn HTTPS nếu hỏi; nhấn Enter để mở trình duyệt, nhập mã từ Terminal tại
+https://github.com/login/device rồi Authorize GitHub CLI. Đăng nhập namnd74.
+Scope workflow cần để push các file CI. Credential HTTPS/SSH cũ trên máy
+đang thuộc namkma99, nên dùng credential của CLI trong các lệnh push bên dưới.
+
+Tạo PAT classic ở https://github.com/settings/tokens/new: đặt tên gitops-demo,
+thời hạn 30 ngày, chọn public_repo và read:packages cho hai repo public của lab.
+Copy token và nhập tại prompt Terminal (không gửi vào chat/câu lệnh/Git):
+
+```bash
+gh secret set CONFIG_REPO_PAT --repo namnd74/gitops-manifests
+# Nếu token BE cũ không còn hợp lệ, đặt cùng token mới ở repo BE:
+gh secret set CONFIG_REPO_PAT --repo namnd74/be-service
+gh secret list --repo namnd74/gitops-manifests
+gh secret list --repo namnd74/be-service
+```
+
+GitHub chỉ hiển thị token mới một lần, không đọc lại được giá trị secret đã lưu.
+Token Actions và credential CLI là hai việc riêng. Nếu repo private, điều
+chỉnh quyền và cấu hình Argo credential/imagePullSecret.
+
+## 3. Dựng hạ tầng và seal credential
 
 ```bash
 cd /Volumes/MacOs/workspaces/git-ops/gitops-manifests
+bash scripts/demo.sh doctor
 bash scripts/demo.sh setup
-```
-
-Script tạo cluster `gitops-demo` nếu chưa có: một server, hai agent, ánh xạ
-`127.0.0.1:80` và `127.0.0.1:443`; cài ingress-nginx, Sealed Secrets, Argo CD.
-Phiên bản được đọc từ `scripts/tool-versions.env`. Script chờ rollout và dừng
-khi có lỗi. Nếu cluster đã có nhưng đang dừng, chạy `k3d cluster start gitops-demo`
-trước khi chạy lại setup. Không xóa cluster cũ: xóa sẽ mất key Sealed Secrets.
-
-Kiểm chứng:
-
-```bash
+bash scripts/demo.sh seal
+bash scripts/validate-manifests.sh
 kubectl --context k3d-gitops-demo get nodes
 kubectl --context k3d-gitops-demo get pods -A
-kubectl --context k3d-gitops-demo -n ingress-nginx get deployment
-kubectl --context k3d-gitops-demo -n kube-system get deployment sealed-secrets-controller
-kubectl --context k3d-gitops-demo -n argocd get deployment,statefulset,ingress
-curl -I http://localhost
 ```
 
-Ba node phải Ready, các controller phải đủ replica sẵn sàng. Bước này chưa
-triển khai `be-service`.
+Setup tạo k3d một server/hai agent, ingress, Sealed Secrets và Argo CD; phiên
+bản pin trong scripts/tool-versions.env. Chờ rollout thành công. Nếu cluster
+cũ đang dừng, k3d cluster start gitops-demo trước khi setup. Không xóa cluster
+vì sẽ mất key controller; seal lại khi key đổi. Giữ .demo/ migration.
 
-## 4. Mở Argo CD
+## 4. Argo CD
 
-Truy cập `http://localhost`, tài khoản `admin`. Lấy mật khẩu trực tiếp trong
-Terminal cá nhân, không lưu vào hướng dẫn hay log:
+Mở http://localhost, tài khoản admin. Lấy mật khẩu trong Terminal cá nhân:
 
 ```bash
-kubectl --context k3d-gitops-demo -n argocd get secret argocd-initial-admin-secret \
-  -o jsonpath='{.data.password}' | base64 --decode
+kubectl --context k3d-gitops-demo -n argocd get secret argocd-initial-admin-secret -o jsonpath='{.data.password}' | base64 --decode
 ```
 
-Nếu ingress chưa truy cập được, dùng Terminal riêng:
+Không lưu mật khẩu vào log. Nếu ingress không truy cập được, dùng Terminal
+riêng chạy port-forward rồi mở https://localhost:8080:
 
 ```bash
 kubectl --context k3d-gitops-demo -n argocd port-forward svc/argocd-server 8080:443
 ```
 
-Sau đó mở `https://localhost:8080` (chứng chỉ local).
-
-## 5. Seal credential lab theo key của cluster
+## 5. Đưa cấu hình bootstrap lên GitHub
 
 ```bash
 cd /Volumes/MacOs/workspaces/git-ops/gitops-manifests
-bash scripts/demo.sh seal
-for env in dev staging prod; do
-  kubeseal --context k3d-gitops-demo --validate \
-    < "apps/be-service/envs/$env/sealed-secret.yaml"
-done
-bash scripts/validate-manifests.sh
-```
-
-`seal` giữ ciphertext còn hợp lệ, tạo credential ngẫu nhiên chỉ cho lab nếu
-ciphertext cũ không giải mã được. Nó thay đổi manifest local; cần review và
-đưa ciphertext lên GitHub trước khi Argo sử dụng.
-
-## 6. Chuẩn bị và merge cấu hình GitOps
-
-```bash
-cd /Volumes/MacOs/workspaces/git-ops/gitops-manifests
-git status --short --branch
 bash scripts/validate-manifests.sh
 python3 -m unittest discover -s scripts/tests -v
+actionlint
 git diff --check
+git -c credential.helper= -c 'credential.helper=!gh auth git-credential' push -u origin seminar/demo-ready
 ```
 
-Review thay đổi đang có ở branch `seminar/demo-ready`; đưa cấu hình và script
-lên PR vào `main` theo quy trình repo. Chỉ stage file đã review, không stage
-`.demo/`, cache, token hay plaintext credential. Runbook seminar có các lệnh
-commit/push/PR. Không chạy `connect` với working tree còn thay đổi.
+Tạo PR seminar/demo-ready vào config main, review/merge bằng merge commit.
+Ciphertext lab được commit, plaintext/token/cache/.demo không được commit.
+Để làm bước tạo branch tiếp theo, main remote phải chứa cấu hình mới này.
 
-Trong GitHub, bật Actions và đặt secret `CONFIG_REPO_PAT` ở cả hai repo:
-quyền contents/pull_requests trên config repo và đọc packages/provenance BE.
-Đặt variable `IMAGE_ARCH=arm64` cho lab Apple Silicon. Nếu GitHub/GHCR private,
-cấu hình credential đọc repo cho Argo và imagePullSecret cho workload.
+## 6. Bootstrap ba nhánh remote
 
-Kiểm tra tên secret (không đọc được giá trị secret đã lưu trên GitHub):
+Chỉ khi chưa tồn tại remote dev/staging/prod và config PR đã merge:
 
 ```bash
-gh secret list --repo namnd74/be-service
-gh secret list --repo namnd74/gitops-manifests
+git fetch origin main
+git -c credential.helper= -c 'credential.helper=!gh auth git-credential' push origin origin/main:refs/heads/dev origin/main:refs/heads/staging origin/main:refs/heads/prod
 ```
 
-Ngày thực hiện, BE đã có secret nhưng config repo chưa có. Dùng PAT bạn giữ
-riêng có các quyền nêu trên; nếu không còn giữ giá trị, tạo PAT mới phù hợp.
-Thêm bằng prompt tương tác trong Terminal:
+Repo GitOps đã đặt allow_merge_commit=true, allow_squash_merge=false và
+allow_rebase_merge=false để giữ lịch sử promotion.
 
-Với hai repo public của lab, tạo token classic ở
-`https://github.com/settings/tokens/new`: đặt tên `gitops-demo`, thời hạn 30
-ngày, chọn `public_repo` và `read:packages`, rồi Generate token. Copy token
-vừa tạo để nhập vào prompt sau; GitHub chỉ hiển thị token một lần. Token này
-dùng cho workflow mở PR cấu hình và đọc image, không dùng để push thay đổi
-workflow từ máy local. Nếu chuyển repo thành private, cần điều chỉnh quyền.
+Ba nhánh bắt đầu cùng cấu hình (tag bootstrap chưa phải release). Không force
+push nếu nhánh đã có. Branch local được chuẩn bị để review; khi remote mới
+được bootstrap, fetch rồi fast-forward local tương ứng nếu cần. Bật required
+validate và review trên dev/staging/prod. Chọn merge commit cho promotion.
 
-```bash
-gh secret set CONFIG_REPO_PAT --repo namnd74/gitops-manifests
-```
-
-Dán token khi CLI hỏi, không đặt token trực tiếp trong câu lệnh. Nếu dùng PAT
-mới để thay token BE, cập nhật cả repo BE:
-
-```bash
-gh secret set CONFIG_REPO_PAT --repo namnd74/be-service
-```
-
-## 7. Phát hành backend qua CI
+## 7. Merge backend và release Dev
 
 ```bash
 cd /Volumes/MacOs/workspaces/git-ops/be-service
-bash scripts/check-quality.sh
+GOCACHE=/private/tmp/gitops-go-build bash scripts/check-quality.sh
 python3 -m unittest discover -s scripts/tests -v
-git diff --check
-git status --short --branch
+actionlint
+git -c credential.helper= -c 'credential.helper=!gh auth git-credential' push -u origin seminar/demo-ready
 ```
 
-Review và đưa thay đổi BE lên PR, merge vào `main`, sau đó theo dõi:
+Tạo PR vào BE main, review/merge. IMAGE_ARCH=arm64 cho máy Apple Silicon.
+CI build/scan/publish/attest/ký một digest, rồi mở release-be-service-dev vào
+config dev. PR chỉ cập nhật apps/be-service/base/kustomization.yaml trên dev.
+Review CI evidence và merge Dev PR:
 
 ```bash
 gh run list --repo namnd74/be-service --workflow ci.yaml --limit 3
-```
-
-CI phải qua quality/build/scan, publish image, tạo provenance/chữ ký và mở
-Dev PR trong config repo. Review và merge Dev PR. Không coi tag bootstrap
-`sha-9912c6b` là release đã xác minh; cần image reference `@sha256:...` thật.
-
-## 8. Kết nối Argo và kiểm chứng Dev
-
-Sau khi mọi thay đổi config đã merge, chuyển về `main` với working tree sạch
-(không bỏ thay đổi local để ép sạch):
-
-```bash
 cd /Volumes/MacOs/workspaces/git-ops/gitops-manifests
-git switch main
-git pull --ff-only origin main
 bash scripts/demo.sh connect
-bash scripts/demo.sh status
 bash scripts/demo.sh check dev
 ```
 
-`connect` kiểm tra HEAD bằng remote main, manifest, image supply chain và
-Sealed Secrets cho mọi môi trường có digest trước khi apply Applications.
-Staging/Prod còn tag bootstrap được bỏ qua; chạy lại `connect` sau khi merge
-promotion đầu tiên của từng môi trường. Chờ Argo reconcile rồi chạy
-`check dev` lại nếu rollout chưa xong. `check` đối chiếu Git revision,
-Argo Synced/Healthy, digest pod và `/version`, không chỉ HTTP 200.
+connect/check fetch từng remote branch và kiểm tra snapshot đó, không yêu cầu
+checkout local cùng một main. Working tree vẫn phải sạch để tránh bỏ sót thay
+đổi chưa publish. Staging/Prod bootstrap chưa được connect đến workload.
 
-Các URL workload theo manifest:
-
-- `http://dev.127.0.0.1.nip.io`
-- `http://staging.127.0.0.1.nip.io`
-- `http://prod.127.0.0.1.nip.io`
-
-## 9. Promotion và rollback
-
-Sau khi `check dev` đạt:
+## 8. Demo merge dev → staging → prod
 
 ```bash
-gh workflow run promote.yaml --repo namnd74/gitops-manifests -f from=dev -f to=staging
+gh workflow run promote.yaml --repo namnd74/gitops-manifests --ref main -f from=dev -f to=staging
+gh pr list --repo namnd74/gitops-manifests --base staging --head dev
 ```
 
-Review/merge PR, pull config main, chạy `bash scripts/demo.sh connect` rồi
-`bash scripts/demo.sh check staging`.
-Khi Staging đạt, promotion `staging → prod`, review/merge và kiểm chứng Prod:
+Review PR rồi Create a merge commit. Sau merge:
 
 ```bash
-gh workflow run promote.yaml --repo namnd74/gitops-manifests -f from=staging -f to=prod
-# Sau merge và pull main:
+bash scripts/demo.sh connect
+bash scripts/demo.sh check staging
+gh workflow run promote.yaml --repo namnd74/gitops-manifests --ref main -f from=staging -f to=prod
+# Review/merge PR staging → prod:
 bash scripts/demo.sh connect
 bash scripts/demo.sh check prod
 ```
 
-Rollback và demo fault/drift có trong [runbook seminar](demo-runbook.md).
-Không cần lệnh sync riêng cho Prod: Argo autosync sau merge.
+Workflow và required PR validation chặn cặp nhánh sai, nguồn fault, thay đổi
+cấu hình môi trường/ciphertext và image chưa xác minh. Promotion không rebuild.
+URL: http://dev.127.0.0.1.nip.io, http://staging.127.0.0.1.nip.io,
+http://prod.127.0.0.1.nip.io. Mỗi workload chạy replica 1/2/3 tương ứng.
 
-## Nhật ký thực hiện 06/10/2026
+## 9. Evidence và rollback
 
-- Docker engine 29.4.0 đã được kiểm tra ngoài sandbox.
-- Khi bắt đầu, Docker không có container và k3d chưa có cluster.
-- Đã cài `yq` 4.54.1 và `cosign` 3.1.3.
-- Đã đăng nhập GitHub `namnd74`; `bash scripts/demo.sh doctor` PASS.
-- `bash scripts/demo.sh setup` hoàn tất với exit code 0: ba node Ready,
-  ingress-nginx và Sealed Secrets đều 1/1; cả bảy pod Argo CD Running, 1/1.
-- `http://localhost` và `https://localhost` đều trả HTTP 200 (HTTPS kiểm tra
-  với chứng chỉ local qua `curl -k`).
-- Đã seal lại credential lab cho ba môi trường; cả ba ciphertext validate
-  thành công và ba overlay manifest PASS.
-- 27 test GitOps, 8 test script BE đều PASS; Go test/race/vet/format PASS,
-  coverage 73,5%. `git diff --check` không báo lỗi.
-- Chưa có Argo Applications hay workload backend. Chưa thực hiện live
-  acceptance của release, promotion hoặc rollback.
-- Hai repo có thay đổi chưa commit trên branch `seminar/demo-ready`.
-  Overlay vẫn dùng tag bootstrap `sha-9912c6b`, chưa có digest release mới.
-- Hai GitHub repo đều public. BE có `CONFIG_REPO_PAT`; config repo chưa có.
-  Giá trị và hiệu lực PAT BE chưa được xác minh.
-- Điểm tiếp tục: thêm PAT cho config repo (bước 6), review/merge cấu hình,
-  phát hành BE qua CI (bước 7), merge Dev PR và chạy connect/check (bước 8).
+check từng môi trường phải PASS: đúng nhánh/revision Argo, Synced/Healthy,
+image digest, replica/pod readiness, OCI source/version và /version HTTP.
+Lưu revision tốt theo nhánh. Fault, drift và rollback qua PR được mô tả trong
+[runbook](demo-runbook.md).
 
-### Lần chạy tiếp: chuẩn bị PR
+## Kết quả và điểm còn chờ
 
-- Đã kiểm tra lại manifest và test: 30 test GitOps PASS (thêm ba regression
-  test cho connect), Go quality và 8 test script BE PASS, coverage 73,5%.
-- Review phát hiện `connect` cũ apply cả môi trường còn bootstrap. Đã sửa:
-  kiểm tra mọi digest trước khi apply, bỏ qua Staging/Prod chưa promotion.
-- Đã commit cấu hình tại `6f525d8`, bản sửa connect tại `4030c4e`; BE tại
-  `714d081`, trên branch `seminar/demo-ready`. Chưa push thành công, chưa có PR.
-- Git HTTPS và SSH mặc định dùng tài khoản `namkma99`, không có quyền push
-  hai repo của `namnd74`. GitHub CLI đúng tài khoản nhưng thiếu scope `workflow`.
+Hạ tầng đã dựng: Docker29.4.0, ba node Ready, ingress/Sealed Secrets1/1 và
+bảy pod Argo1/1; HTTP/HTTPS localhost200. Credential đã seal lại cho ba môi
+trường và validate. BE Go quality PASS, coverage73,5%. Các kiểm tra workflow,
+promotion/rollback/branch snapshots đã chạy lại: 38 test GitOps và 8 test
+script BE PASS; actionlint ở cả hai repo và ba overlay đều PASS. Test Git
+thực hiện hai chu kỳ merge release, giữ đúng replica và ciphertext.
 
-Trong Terminal, cấp quyền để push thay đổi file CI:
-
-```bash
-gh auth refresh --hostname github.com --scopes workflow
-```
-
-Làm theo mã và xác nhận qua trình duyệt giống bước đăng nhập. Sau khi CLI có
-scope `workflow`, push bằng credential CLI cho đúng tài khoản, không thay đổi
-cấu hình Git global:
-
-```bash
-cd /Volumes/MacOs/workspaces/git-ops/gitops-manifests
-git -c credential.helper= -c 'credential.helper=!gh auth git-credential' push -u origin seminar/demo-ready
-cd /Volumes/MacOs/workspaces/git-ops/be-service
-git -c credential.helper= -c 'credential.helper=!gh auth git-credential' push -u origin seminar/demo-ready
-```
-
-Sau đó tạo PR cho từng repo. Config PR merge trước BE PR. Đây là quyền CLI
-để push workflow, khác với secret `CONFIG_REPO_PAT` dùng trong Actions.
-
-Nếu chạy Go quality từ sandbox bị lỗi cache ngoài workspace, dùng:
-
-```bash
-GOCACHE=/private/tmp/gitops-go-build bash scripts/check-quality.sh
-```
+Chưa có backend/Argo Applications live và chưa xác minh release CI thực tế.
+Lần kiểm tra quyền gần nhất: CLI namnd74 chưa có workflow, config repo chưa
+có CONFIG_REPO_PAT. Nhánh remote hiện vẫn chỉ main. Cần hoàn tất bước2 để
+push cấu hình mới; không tạo nhánh remote từ main cũ thiếu cấu hình.

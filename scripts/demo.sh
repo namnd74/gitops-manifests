@@ -21,6 +21,14 @@ USAGE
 command=${1:---help}
 case "$command" in doctor|setup|seal|connect|status|check) ;; --help|-h) usage; exit 0 ;; *) usage >&2; exit 2 ;; esac
 require() { command -v "$1" >/dev/null || { echo "Missing tool: $1" >&2; exit 1; }; }
+# Read immutable snapshots so each environment follows its own remote branch.
+snapshot() {
+    local env=$1 destination=$2
+    git fetch --no-tags origin "refs/heads/$env:refs/remotes/origin/$env"
+    git rev-parse "refs/remotes/origin/$env" > "$destination.revision"
+    mkdir -p "$destination"
+    git archive "$(cat "$destination.revision")" | tar -x -C "$destination"
+}
 case "$command" in
  doctor)
     for tool in docker kubectl k3d kubeseal kustomize yq jq git gh cosign python3 openssl; do require "$tool"; done
@@ -50,18 +58,23 @@ case "$command" in
     gh auth status
     cd "$ROOT"
     [[ -z "$(git status --porcelain)" ]] || { echo 'Commit/merge and pull config changes first; working tree must be clean.' >&2; exit 1; }
-    [[ "$(git rev-parse HEAD)" == "$(git ls-remote origin refs/heads/main | awk '{print $1}')" ]] || { echo 'Local HEAD must match origin/main.' >&2; exit 1; }
-    bash "$ROOT/scripts/validate-manifests.sh"
+    temporary=$(mktemp -d)
+    trap 'rm -rf "$temporary"' EXIT
     applications=()
     for env in dev staging prod; do
-        ref=$(kustomize build "apps/be-service/envs/$env" | yq -er 'select(.kind == "Deployment" and .metadata.name == "be-service") | .spec.template.spec.containers[0].image')
+        snapshot "$env" "$temporary/$env"
+        branch_root="$temporary/$env"
+        bash "$branch_root/scripts/validate-manifests.sh"
+        application="$branch_root/argocd/applications/be-service-$env.yaml"
+        [[ "$(yq -er '.spec.source.targetRevision' "$application")" == "$env" ]] || { echo "Wrong Argo branch for $env" >&2; exit 1; }
+        ref=$(kustomize build "$branch_root/apps/be-service/envs/$env" | yq -er 'select(.kind == "Deployment" and .metadata.name == "be-service") | .spec.template.spec.containers[0].image')
         if [[ "$env" != dev && "$ref" == ghcr.io/namnd74/be-service:sha-9912c6b ]]; then
             echo "[SKIP] $env has no promoted digest yet; run connect again after promotion"
             continue
         fi
         bash "$ROOT/scripts/verify-image.sh" "$ref" namnd74/be-service
-        kubeseal --context "$CONTEXT" --validate < "apps/be-service/envs/$env/sealed-secret.yaml"
-        applications+=("$ROOT/argocd/applications/be-service-$env.yaml")
+        kubeseal --context "$CONTEXT" --validate < "$branch_root/apps/be-service/envs/$env/sealed-secret.yaml"
+        applications+=("$application")
     done
     for application in "${applications[@]}"; do "${K[@]}" apply -f "$application"; done
     echo '[OK] Verified environments track GitHub and auto-sync after merge. Run check after reconciliation.'
@@ -77,7 +90,9 @@ case "$command" in
     [[ -z "$(git status --porcelain)" ]] || { echo 'Pull the merged config into a clean checkout first.' >&2; exit 1; }
     temporary=$(mktemp -d)
     trap 'rm -rf "$temporary"' EXIT
-    kustomize build "apps/be-service/envs/$env" > "$temporary/rendered.yaml"
+    snapshot "$env" "$temporary/config"
+    revision=$(cat "$temporary/config.revision")
+    kustomize build "$temporary/config/apps/be-service/envs/$env" > "$temporary/rendered.yaml"
     yq -o=json 'select(.kind == "Deployment" and .metadata.name == "be-service")' "$temporary/rendered.yaml" > "$temporary/desired.json"
     ref=$(jq -er '.spec.template.spec.containers[0].image' "$temporary/desired.json")
     [[ "${ref##*@}" =~ ^sha256:[0-9a-f]{64}$ ]] || { echo 'Publish and merge a real digest release first.' >&2; exit 1; }
@@ -87,7 +102,7 @@ case "$command" in
     "${K[@]}" -n argocd get application "be-service-$env" -o json > "$temporary/app.json"
     "${K[@]}" -n "$env" get deployment be-service -o json > "$temporary/deploy.json"
     "${K[@]}" -n "$env" get pods -l app=be-service -o json > "$temporary/pods.json"
-    python3 - "$env" "$temporary" "$(git rev-parse HEAD)" "$host" <<'PY_CHECK'
+    python3 - "$env" "$temporary" "$revision" "$host" <<'PY_CHECK'
 import json,sys,pathlib
 from urllib.request import urlopen
 env,directory,head,host=sys.argv[1:]; directory=pathlib.Path(directory)
@@ -95,7 +110,8 @@ def read(name): return json.loads((directory/(name+'.json')).read_text())
 a=read('app'); d=read('deploy'); desired=read('desired'); labels=read('image')['config']['Labels']
 assert a['spec']['source']['repoURL']=='https://github.com/namnd74/gitops-manifests.git', 'Argo still uses a local mirror'
 assert a['status']['sync']['status']=='Synced' and a['status']['health']['status']=='Healthy', 'Argo not Synced/Healthy'
-assert a['status']['sync']['revision']==head, 'Pull the deployed config commit before checking'
+assert a['spec']['source']['targetRevision']==env, 'Argo tracks the wrong environment branch'
+assert a['status']['sync']['revision']==head, 'Argo has not reconciled the environment branch head'
 ref=desired['spec']['template']['spec']['containers'][0]['image']; digest=ref.split('@')[1]
 assert d['spec']['template']['spec']['containers'][0]['image']==ref, 'Deployment differs from rendered Git configuration'
 pods=[p for p in read('pods')['items'] if not p['metadata'].get('deletionTimestamp')]

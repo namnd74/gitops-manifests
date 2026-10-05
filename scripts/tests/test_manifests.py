@@ -26,6 +26,13 @@ class ManifestTest(unittest.TestCase):
         return subprocess.run(['bash', str(self.root/'scripts/validate-manifests.sh')],
                               capture_output=True, text=True)
 
+    def test_all_overlays_inherit_branch_release_digest(self):
+        self.edit('apps/be-service/base/kustomization.yaml',
+                  'del(.images[0].newTag) | .images[0].digest = "sha256:'+'a'*64+'"')
+        for env in ('dev', 'staging', 'prod'):
+            rendered = subprocess.check_output(['kustomize', 'build', str(self.root/f'apps/be-service/envs/{env}')], text=True)
+            self.assertIn('ghcr.io/namnd74/be-service@sha256:'+'a'*64, rendered)
+
     def test_accepts_bootstrap(self):
         result = self.validate()
         self.assertEqual(result.returncode, 0, result.stderr)
@@ -59,11 +66,11 @@ class ManifestTest(unittest.TestCase):
         self.assertNotEqual(self.validate().returncode, 0)
 
     def test_rejects_unapproved_mutable_tag(self):
-        self.edit('apps/be-service/envs/dev/kustomization.yaml', '.images[0].newTag = "latest"')
+        self.edit('apps/be-service/base/kustomization.yaml', '.images[0].newTag = "latest"')
         self.assertNotEqual(self.validate().returncode, 0)
 
     def test_rejects_unapproved_image(self):
-        self.edit('apps/be-service/envs/dev/kustomization.yaml', '.images[0].newName = "example.com/untrusted/app"')
+        self.edit('apps/be-service/base/kustomization.yaml', '.images[0].newName = "example.com/untrusted/app"')
         self.assertNotEqual(self.validate().returncode, 0)
 
 if __name__ == '__main__':

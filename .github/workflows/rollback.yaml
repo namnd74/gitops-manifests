@@ -24,6 +24,7 @@ jobs:
         run: test -n "$CONFIG_REPO_PAT"
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
+          ref: ${{ inputs.env }}
           fetch-depth: 0
           token: ${{ secrets.CONFIG_REPO_PAT }}
       - name: Install pinned YAML tools
@@ -45,14 +46,13 @@ jobs:
           case "$RESTORE_ENV" in dev|staging|prod) ;; *) exit 2 ;; esac
           [[ "$REVISION" =~ ^[0-9a-fA-F]{7,40}$ ]] || { echo "Invalid config revision" >&2; exit 2; }
           directory="apps/be-service/envs/$RESTORE_ENV"
-          # Restore the artifact and environment values only, never ciphertext or shared base.
-          for file in kustomization.yaml deployment-env-patch.yaml; do
-            git show "$REVISION:$directory/$file" > "$RUNNER_TEMP/$file"
-          done
-          # Refuse legacy revisions that depended on the deleted release contract.
-          yq -e '.commonAnnotations == null and ([.patches[] | select(has("path"))] | length) == 1' "$RUNNER_TEMP/kustomization.yaml" >/dev/null
-          cp "$RUNNER_TEMP/kustomization.yaml" "$directory/kustomization.yaml"
-          cp "$RUNNER_TEMP/deployment-env-patch.yaml" "$directory/deployment-env-patch.yaml"
+          # Restore only the shared image reference and this environment's patch.
+          git show "$REVISION:apps/be-service/base/kustomization.yaml" > "$RUNNER_TEMP/base.yaml"
+          old_digest=$(yq -er '.images[] | select(.name == env(IMAGE)) | .digest' "$RUNNER_TEMP/base.yaml")
+          [[ "$old_digest" =~ ^sha256:[0-9a-f]{64}$ ]] || { echo 'Rollback requires a digest revision' >&2; exit 1; }
+          git show "$REVISION:$directory/deployment-env-patch.yaml" > "$RUNNER_TEMP/patch.yaml"
+          (cd apps/be-service/base && kustomize edit set image "$IMAGE=$IMAGE@$old_digest")
+          cp "$RUNNER_TEMP/patch.yaml" "$directory/deployment-env-patch.yaml"
           bash scripts/validate-manifests.sh
           restored=$(kustomize build "$directory")
           fault=$(yq -r 'select(.kind == "Deployment" and .metadata.name == "be-service") | .spec.template.spec.containers[0].env[] | select(.name == "DEMO_FAULT") | .value' <<< "$restored")
@@ -63,8 +63,9 @@ jobs:
         uses: peter-evans/create-pull-request@271a8d0340265f705b14b6d32b9829c1cb33d45e # v7.0.8
         with:
           token: ${{ secrets.CONFIG_REPO_PAT }}
+          base: ${{ inputs.env }}
           add-paths: |
-            apps/be-service/envs/${{ inputs.env }}/kustomization.yaml
+            apps/be-service/base/kustomization.yaml
             apps/be-service/envs/${{ inputs.env }}/deployment-env-patch.yaml
           title: "rollback: ${{ inputs.env }} to ${{ inputs.revision }}"
           commit-message: "chore(release): restore ${{ inputs.env }} from ${{ inputs.revision }}"

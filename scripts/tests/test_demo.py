@@ -37,13 +37,17 @@ class ConnectTest(unittest.TestCase):
         self.bin.mkdir()
         self.calls = self.path/'calls'
         self.env = dict(os.environ, PATH=str(self.bin)+':'+os.environ['PATH'], CALLS=str(self.calls))
+        self.snapshots = self.path/'snapshots'
+        for env in ('dev', 'staging', 'prod'):
+            shutil.copytree(self.repo, self.snapshots/env)
+        self.env['GIT_FIXTURES'] = str(self.snapshots)
         self.digest('dev', 'a')
         for name, body in {
-            'git': 'case "$1" in status) ;; rev-parse) printf "%040d\\n" 1 ;; ls-remote) printf "%040d\\trefs/heads/main\\n" 1 ;; esac',
+             'git': 'case "$1" in status|fetch) ;; rev-parse) echo "${2##*/}" ;; archive) branch="${2##*/}"; tar -C "$GIT_FIXTURES/$branch" -cf - apps scripts argocd ;; esac',
             'gh': 'exit 0',
             'kubeseal': 'exit 0',
             'docker': '''echo '{"config":{"Labels":{"org.opencontainers.image.revision":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","org.opencontainers.image.version":"v1.2.3","org.opencontainers.image.source":"https://github.com/namnd74/be-service"}}}' ''',
-            'cosign': 'case "$*" in *"${FAIL_DIGEST:-never}"*) exit 1 ;; esac',
+            'cosign': 'case "$*" in *"${FAIL_DIGEST:-never}"*) echo SIGNATURE_REJECTED >&2; exit 1 ;; esac',
             'kubectl': 'printf "%s\\n" "$*" >> "$CALLS"',
         }.items():
             file = self.bin/name
@@ -51,7 +55,7 @@ class ConnectTest(unittest.TestCase):
             file.chmod(0o755)
 
     def digest(self, env, character):
-        file = self.repo/f'apps/be-service/envs/{env}/kustomization.yaml'
+        file = self.snapshots/env/'apps/be-service/base/kustomization.yaml'
         file.write_text(file.read_text().replace('newTag: sha-9912c6b', 'digest: sha256:'+character*64))
 
     def connect(self):
@@ -72,6 +76,7 @@ class ConnectTest(unittest.TestCase):
         self.env['FAIL_DIGEST'] = 'sha256:'+'c'*64
         result = self.connect()
         self.assertNotEqual(result.returncode, 0)
+        self.assertIn('SIGNATURE_REJECTED', result.stderr)
         self.assertEqual(self.applied(), '')
 
     def test_verified_promoted_environments_are_connected(self):
