@@ -263,3 +263,40 @@ Không cần lệnh sync riêng cho Prod: Argo autosync sau merge.
   Giá trị và hiệu lực PAT BE chưa được xác minh.
 - Điểm tiếp tục: thêm PAT cho config repo (bước 6), review/merge cấu hình,
   phát hành BE qua CI (bước 7), merge Dev PR và chạy connect/check (bước 8).
+
+### Lần chạy tiếp: chuẩn bị PR
+
+- Đã kiểm tra lại manifest và test: 30 test GitOps PASS (thêm ba regression
+  test cho connect), Go quality và 8 test script BE PASS, coverage 73,5%.
+- Review phát hiện `connect` cũ apply cả môi trường còn bootstrap. Đã sửa:
+  kiểm tra mọi digest trước khi apply, bỏ qua Staging/Prod chưa promotion.
+- Đã commit cấu hình tại `6f525d8`, bản sửa connect tại `4030c4e`; BE tại
+  `714d081`, trên branch `seminar/demo-ready`. Chưa push thành công, chưa có PR.
+- Git HTTPS và SSH mặc định dùng tài khoản `namkma99`, không có quyền push
+  hai repo của `namnd74`. GitHub CLI đúng tài khoản nhưng thiếu scope `workflow`.
+
+Trong Terminal, cấp quyền để push thay đổi file CI:
+
+```bash
+gh auth refresh --hostname github.com --scopes workflow
+```
+
+Làm theo mã và xác nhận qua trình duyệt giống bước đăng nhập. Sau khi CLI có
+scope `workflow`, push bằng credential CLI cho đúng tài khoản, không thay đổi
+cấu hình Git global:
+
+```bash
+cd /Volumes/MacOs/workspaces/git-ops/gitops-manifests
+git -c credential.helper= -c 'credential.helper=!gh auth git-credential' push -u origin seminar/demo-ready
+cd /Volumes/MacOs/workspaces/git-ops/be-service
+git -c credential.helper= -c 'credential.helper=!gh auth git-credential' push -u origin seminar/demo-ready
+```
+
+Sau đó tạo PR cho từng repo. Config PR merge trước BE PR. Đây là quyền CLI
+để push workflow, khác với secret `CONFIG_REPO_PAT` dùng trong Actions.
+
+Nếu chạy Go quality từ sandbox bị lỗi cache ngoài workspace, dùng:
+
+```bash
+GOCACHE=/private/tmp/gitops-go-build bash scripts/check-quality.sh
+```
