@@ -49,6 +49,31 @@ class DemoRunnerTests(unittest.TestCase):
         result = self.helper('wait_checks example/repo 5', 'echo \'[{"bucket":"pass","name":"validate"}]\'\n')
         self.assertEqual(result.returncode, 0, result.stderr)
 
+    def test_wait_checks_waits_for_github_to_register_checks(self):
+        result = self.helper('WAIT_SECONDS=5; wait_checks example/repo 5', '''
+if [[ ! -f "$0.seen" ]]; then
+    touch "$0.seen"
+    echo "no checks reported on the 'feature/demo' branch" >&2
+    exit 1
+fi
+echo '[{"bucket":"pass","name":"validate"}]'
+''')
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_wait_checks_no_registered_checks_times_out_without_merge(self):
+        result = self.helper('wait_checks example/repo 5', '''
+echo "no checks reported on the 'feature/demo' branch" >&2
+exit 1
+''')
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('Checks timeout', result.stderr)
+
+    def test_wait_checks_does_not_hide_api_errors(self):
+        result = self.helper('wait_checks example/repo 5',
+                             'echo "HTTP 403: Resource not accessible" >&2; exit 1\n')
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('Cannot read checks', result.stderr)
+
     def test_failure_must_be_exact_docker_step_not_scan(self):
         good = {'jobs': [
             {'name': 'Test, race, vet, and format', 'conclusion': 'success'},

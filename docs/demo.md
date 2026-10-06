@@ -48,6 +48,9 @@ Mặc định mỗi lần chờ tối đa 3600 giây, poll 10 giây; có thể �
 
 Lưu ý khi bị gián đoạn:
 
+- GitHub có thể chưa đăng ký checks ngay sau khi tạo PR. Runner báo `[WAIT] Checks not registered yet`
+  và tiếp tục chờ trong thời hạn; chưa có checks không được xem là đạt. Nếu timeout hoặc gặp lỗi API,
+  kiểm tra Actions/quyền truy cập rồi dùng `--resume` để tiếp tục với PR đã tạo.
 - `Unfinished session` nghĩa là session trước chưa được ghi nhận hoàn tất. Dùng đúng ID trong thông báo
   với `--resume`; không tạo vòng mới hoặc xóa state để vượt qua kiểm tra. Nếu case đã tới checkpoint 7,
   resume chỉ chốt metadata, không chạy lại release. Checkpoint rỗng/hỏng sẽ bị từ chối; giữ log và

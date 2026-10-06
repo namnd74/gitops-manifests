@@ -7,8 +7,15 @@ wait_checks() {
     local repo=$1 pr=$2 deadline=$((SECONDS+WAIT_SECONDS)) checks code
     while :; do
         code=0
-        checks=$(gh pr checks "$pr" --repo "$repo" --json bucket,name,link) || code=$?
-        [[ "$code" == 0 || "$code" == 8 || "$checks" == '[]' ]] || fail "Cannot read checks for $repo#$pr"
+        checks=$(gh pr checks "$pr" --repo "$repo" --json bucket,name,link 2>&1) || code=$?
+        # GitHub may not have registered jobs yet immediately after PR creation.
+        if [[ "$code" == 1 && "$checks" == "no checks reported on the '"*"' branch" ]]; then
+            checks='[]'
+            printf '[WAIT] Checks not registered yet for %s#%s\n' "$repo" "$pr" >&2
+        elif [[ "$code" != 0 && "$code" != 8 ]]; then
+            fail "Cannot read checks for $repo#$pr: $checks"
+        fi
+        jq -e 'type == "array"' <<< "$checks" >/dev/null || fail "Invalid checks response for $repo#$pr: $checks"
         if jq -e --arg backend "${SOURCE_REPO:-}" --arg repo "$repo" '
           any(.[]; .bucket == "fail" or .bucket == "cancel" or
             (.bucket == "skipping" and ($repo != $backend or
