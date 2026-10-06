@@ -123,6 +123,7 @@ esac
         for env in ('dev','staging','prod'):
             self.assertIn(f'bootstrap/secrets/{env}-sealed.yaml', invoked)
             self.assertIn(f'bootstrap/applications/be-service-{env}.yaml', invoked)
+        self.assertIn('argocd.argoproj.io/tracking-id-', invoked)
 
     def test_build_configures_release_variables_and_dispatches_github_ci(self):
         calls = self.root/'gh-calls'

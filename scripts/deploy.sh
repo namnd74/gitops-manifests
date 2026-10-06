@@ -15,6 +15,9 @@ require_tools kubectl
 read_state bootstrap.json render >/dev/null
 for environment in dev staging prod; do
     k apply -f "$STATE_DIR/bootstrap/secrets/$environment-sealed.yaml"
+    # Take bootstrap secrets out of former Argo tracking before changing its source.
+    k -n "$environment" annotate sealedsecret be-service-secret argocd.argoproj.io/tracking-id- --overwrite
+    k -n "$environment" label sealedsecret be-service-secret app.kubernetes.io/instance- --overwrite
     k apply -f "$STATE_DIR/bootstrap/applications/be-service-$environment.yaml"
     k -n argocd annotate application "be-service-$environment" argocd.argoproj.io/refresh=hard --overwrite
 done

@@ -24,6 +24,8 @@ for environment in dev staging prod; do
             kubeseal --cert "$STATE_DIR/controller-cert.pem" --scope strict --format yaml > "$cached"
     fi
     cp "$cached" "$bootstrap/secrets/$environment-sealed.yaml"
+    yq -i '.metadata.annotations."argocd.argoproj.io/sync-options" = "Prune=false"' \
+        "$bootstrap/secrets/$environment-sealed.yaml"
     ENVIRONMENT="$environment" yq '
         .metadata.name = "be-service-" + strenv(ENVIRONMENT) |
         .spec.source.repoURL = strenv(CONFIG_REPO_URL) |
