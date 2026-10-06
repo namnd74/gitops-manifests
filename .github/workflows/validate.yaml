@@ -2,7 +2,7 @@ name: Validate manifests
 on:
   pull_request:
   push:
-    branches: [main, dev, staging, prod]
+    branches: [main]
 permissions: {contents: read}
 env:
   IMAGE: ${{ vars.IMAGE || 'ghcr.io/example/be-service' }}
@@ -16,13 +16,13 @@ jobs:
         run: bash scripts/install-ci-tools.sh
       - name: Validate rendered configuration
         run: bash scripts/validate-manifests.sh
-      - name: Test lab and release behavior
+      - name: Test local and release behavior
         run: python3 -m unittest discover -s scripts/tests -v
       - uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
-        if: github.event_name == 'pull_request' && (contains(fromJSON('["dev","staging","prod"]'), github.base_ref) || (github.base_ref == 'main' && github.head_ref == 'release-be-service-main'))
+        if: github.event_name == 'pull_request' && github.base_ref == 'main' && github.head_ref == 'release-be-service-main'
         with: {cosign-release: 'v3.1.3'}
       - name: Validate release branch PR
-        if: github.event_name == 'pull_request' && (contains(fromJSON('["dev","staging","prod"]'), github.base_ref) || (github.base_ref == 'main' && github.head_ref == 'release-be-service-main'))
+        if: github.event_name == 'pull_request' && github.base_ref == 'main' && github.head_ref == 'release-be-service-main'
         env:
           BASE_ENV: ${{ github.base_ref }}
           HEAD_BRANCH: ${{ github.head_ref }}
@@ -30,19 +30,13 @@ jobs:
           SOURCE_REPO: ${{ vars.SOURCE_REPO || format('{0}/be-service', github.repository_owner) }}
         run: |
           set -euo pipefail
-          case "$BASE_ENV:$HEAD_BRANCH" in
-            main:release-be-service-main) ;;
-            dev:release-be-service-dev|dev:rollback-dev|dev:fault-dev) ;;
-            staging:dev|prod:staging|staging:rollback-staging|prod:rollback-prod) ;;
-            *) echo 'Invalid release branch pair' >&2; exit 1 ;;
-          esac
-          for file in apps/be-service/envs/*/*.yaml argocd/applications/*.yaml; do
-              if [[ ( "$HEAD_BRANCH" == "rollback-$BASE_ENV" || "$HEAD_BRANCH" == fault-dev ) && "$file" == "apps/be-service/envs/$BASE_ENV/deployment-env-patch.yaml" ]]; then continue; fi
+          [[ "$BASE_ENV:$HEAD_BRANCH" == main:release-be-service-main ]] || { echo 'Invalid release branch pair' >&2; exit 1; }
+          for file in apps/be-service/envs/*/*.yaml; do
               git show "origin/$BASE_ENV:$file" > "$RUNNER_TEMP/target-config.yaml"
               cmp -s "$file" "$RUNNER_TEMP/target-config.yaml" || {
                 echo "Environment configuration differs: $file" >&2; exit 1;
               }
           done
-          rendered=$(kustomize build "apps/be-service/envs/${BASE_ENV/main/dev}")
+          rendered=$(kustomize build "apps/be-service/envs/dev")
           ref=$(yq -er 'select(.kind == "Deployment" and .metadata.name == "be-service") | .spec.template.spec.containers[0].image' <<< "$rendered")
           bash scripts/verify-image.sh "$ref" "$SOURCE_REPO"

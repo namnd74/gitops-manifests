@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Verify immutable artifact identity before opening a promotion or rollback PR.
+# Verify immutable artifact identity before accepting a hosted release PR on main.
 set -euo pipefail
 [[ $# -eq 2 ]] || { echo "Usage: $0 IMAGE@sha256:DIGEST OWNER/REPO" >&2; exit 2; }
 REF=$1

@@ -191,6 +191,7 @@ def prepare_manifests(config, image):
         if not valid:
             cached.write_text(sealed + '\n')
         shutil.copyfile(cached, target)
+        run(['kustomize', 'edit', 'add', 'resource', 'sealed-secret.yaml'], cwd=target.parent)
         app = application(environment)
         app_dir = rendered / 'argocd/applications'
         app_dir.mkdir(parents=True, exist_ok=True)

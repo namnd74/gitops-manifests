@@ -3,6 +3,7 @@
 set -euo pipefail
 SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 # shellcheck source=tool-versions.env
+# shellcheck source=tool-versions.env
 source "$SCRIPT_DIR/tool-versions.env"
 [[ $(uname -s) == Linux && $(uname -m) == x86_64 ]] || { echo 'CI tools require Linux amd64' >&2; exit 1; }
 : "${RUNNER_TEMP:?GitHub Actions runner required}" "${GITHUB_PATH:?GitHub Actions path required}"

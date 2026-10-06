@@ -12,4 +12,3 @@ patches:
   - path: deployment-env-patch.yaml
 resources:
   - ../../base
-  - sealed-secret.yaml

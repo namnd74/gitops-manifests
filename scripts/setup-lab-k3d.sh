@@ -3,15 +3,16 @@ set -Eeuo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 for option in "$@"; do
     case "$option" in
-        --help|-h) echo 'Usage: bash setup.sh (infrastructure only; see scripts/demo-runbook.md)'; exit 0 ;;
+        --help|-h) echo 'Usage: bash scripts/setup-lab-k3d.sh (internal; use scripts/local-dev.sh up)'; exit 0 ;;
         *) echo "Unknown option: $option" >&2; exit 2 ;;
     esac
 done
 # shellcheck disable=SC1091
 source "$SCRIPT_DIR/tool-versions.env"
-CLUSTER_NAME=${CLUSTER_NAME:-gitops-demo}
-HTTP_PORT=${HTTP_PORT:-80}
-HTTPS_PORT=${HTTPS_PORT:-443}
+: "${CLUSTER_NAME:?Use scripts/local-dev.sh up}"
+: "${HTTP_PORT:?Use scripts/local-dev.sh up}"
+: "${HTTPS_PORT:?Use scripts/local-dev.sh up}"
+: "${LOCAL_GIT_VOLUME:?Use scripts/local-dev.sh up}"
 CONTEXT="k3d-$CLUSTER_NAME"
 trap 'echo "[ERROR] Setup stopped at line $LINENO; no success is assumed." >&2' ERR
 info() { echo "[INFO] $*"; }
@@ -49,5 +50,5 @@ done
 "${K[@]}" rollout status statefulset/argocd-application-controller -n argocd --timeout=300s
 "${K[@]}" apply -f "$SCRIPT_DIR/argocd-ingress.yaml"
 echo '[OK] Infrastructure ready. No application release or config file was changed.'
-echo 'Next: use scripts/local-dev.sh up for the complete local flow, or configure the hosted runbook.'
-echo "Argo CD: http://localhost:$HTTP_PORT (admin password: see the runbook)."
+echo 'Next: use scripts/local-dev.sh up for the complete local flow, see README.md.'
+echo "Argo CD: http://localhost:$HTTP_PORT (admin password: see README.md)."

@@ -16,7 +16,7 @@ class SetupEntryPointTest(unittest.TestCase):
             docker.chmod(0o755)
             environment = dict(os.environ, PATH=directory + ":" + os.environ["PATH"])
             return subprocess.run(
-                ["bash", str(ROOT / "setup.sh"), argument],
+                ["bash", str(ROOT / "scripts/setup-lab-k3d.sh"), argument],
                 env=environment, capture_output=True, text=True, timeout=10,
             )
 

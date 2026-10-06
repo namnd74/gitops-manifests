@@ -59,6 +59,16 @@ class ManifestTest(unittest.TestCase):
                   '(.spec.template.spec.containers[0].env[] | select(.name == "DB_PASSWORD").valueFrom.secretKeyRef.optional) = true')
         self.assertNotEqual(self.validate().returncode, 0)
 
+    def test_rejects_cluster_ciphertext_in_shared_source(self):
+        import json
+        path = self.root/'apps/be-service/envs/dev/sealed-secret.yaml'
+        metadata = {'name': 'be-service-secret', 'namespace': 'dev'}
+        path.write_text(json.dumps({'apiVersion': 'bitnami.com/v1alpha1', 'kind': 'SealedSecret',
+            'metadata': metadata, 'spec': {'encryptedData': {'DB_PASSWORD': 'a'*128},
+            'template': {'metadata': metadata, 'type': 'Opaque'}}}))
+        self.edit('apps/be-service/envs/dev/kustomization.yaml', '.resources += ["sealed-secret.yaml"]')
+        self.assertNotEqual(self.validate().returncode, 0)
+
     def test_rejects_plaintext_secret(self):
         path = self.root/'apps/be-service/base/secret.yaml'
         path.write_text('apiVersion: v1\nkind: Secret\nmetadata:\n  name: leaked\nstringData:\n  password: leaked\n')

@@ -1,6 +1,9 @@
 """Portable local GitOps contracts: configuration, Argo routing and real Git state."""
 import importlib.util
 import pathlib
+import json
+import shutil
+from unittest.mock import patch
 import subprocess
 import tempfile
 import unittest
@@ -78,6 +81,31 @@ class LocalDevTest(unittest.TestCase):
                 with self.assertRaises(ValueError):
                     m.publish_snapshot(source, source.parent / 'config.git')
                 target.unlink()
+
+    def test_local_render_generates_cluster_secret_without_source_ciphertext(self):
+        m = self.module()
+        with tempfile.TemporaryDirectory() as directory:
+            root = pathlib.Path(directory)
+            shutil.copytree(ROOT/'apps', root/'apps')
+            self.assertFalse(list((root/'apps').rglob('sealed-secret.yaml')))
+            m.ROOT = root
+            original = m.run
+            def run(args, **kwargs):
+                if args[0] == 'kubeseal':
+                    if '--fetch-cert' in args:
+                        return 'PUBLIC_CERT_FIXTURE'
+                    secret = json.loads(kwargs['input'])
+                    return json.dumps({'apiVersion': 'bitnami.com/v1alpha1', 'kind': 'SealedSecret',
+                        'metadata': secret['metadata'], 'spec': {'encryptedData': {'DB_PASSWORD': 'a'*88},
+                        'template': {'metadata': secret['metadata'], 'type': 'Opaque'}}})
+                return original(args, **kwargs)
+            with patch.object(m, 'run', side_effect=run):
+                m.prepare_manifests(m.load_config(root, {}), 'be-service:local-fixture')
+            for env in ('dev', 'staging', 'prod'):
+                manifest = subprocess.check_output(['kustomize', 'build',
+                    str(root/f'.local/rendered/apps/be-service/envs/{env}')], text=True)
+                self.assertEqual(manifest.count('kind: SealedSecret'), 1)
+                self.assertIn('image: be-service:local-fixture', manifest)
 
     def test_snapshot_uses_real_main_and_excludes_private_runtime_files(self):
         m = self.module()
