@@ -10,22 +10,24 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=local-common.sh
 source "$SCRIPT_DIR/local-common.sh"
 init_local
-# Read the release from GitHub main and verify all three environments match it.
+# Verify each environment against its own Git branch and released artifact.
 require_tools kubectl curl kustomize yq docker gh
 snapshot=$(mktemp -d)
 trap 'rm -rf "$snapshot"' EXIT
-GIT_TERMINAL_PROMPT=0 git -c credential.helper= -c 'credential.helper=!gh auth git-credential' \
-    clone --quiet --depth 1 --branch main "$CONFIG_REPO_URL" "$snapshot/source"
-revision=$(git -C "$snapshot/source" rev-parse HEAD)
-manifest=$(kustomize build "$snapshot/source/apps/be-service/envs/dev")
-image=$(yq -er 'select(.kind == "Deployment" and .metadata.name == "be-service") | .spec.template.spec.containers[0].image' <<< "$manifest")
-[[ "$image" =~ @sha256:[0-9a-f]{64}$ ]] || fail 'GitHub main has no immutable release image yet; wait for CI and merge the manifest PR'
-digest=${image##*@}
-labels=$(docker buildx imagetools inspect "$image" --format '{{json .Image}}')
-version=$(jq -er '.config.Labels["org.opencontainers.image.version"]' <<< "$labels")
-source_sha=$(jq -er '.config.Labels["org.opencontainers.image.revision"]' <<< "$labels")
+releases='{}'
 replicas=0
 for environment in dev staging prod; do
+    branch=$(branch_for_env "$environment")
+    GIT_TERMINAL_PROMPT=0 git -c credential.helper= -c 'credential.helper=!gh auth git-credential' \
+        clone --quiet --depth 1 --branch "$branch" "$CONFIG_REPO_URL" "$snapshot/$branch"
+    revision=$(git -C "$snapshot/$branch" rev-parse HEAD)
+    manifest=$(kustomize build "$snapshot/$branch/apps/be-service/envs/$environment")
+    image=$(yq -er 'select(.kind == "Deployment" and .metadata.name == "be-service") | .spec.template.spec.containers[0].image' <<< "$manifest")
+    [[ "$image" =~ @sha256:[0-9a-f]{64}$ ]] || fail "GitHub $branch has no immutable release image yet; wait for CI and merge the manifest PR"
+    digest=${image##*@}
+    labels=$(docker buildx imagetools inspect "$image" --format '{{json .Image}}')
+    version=$(jq -er '.config.Labels["org.opencontainers.image.version"]' <<< "$labels")
+    source_sha=$(jq -er '.config.Labels["org.opencontainers.image.revision"]' <<< "$labels")
     replicas=$((replicas+1)); deadline=$((SECONDS+300))
     k -n argocd annotate application "be-service-$environment" argocd.argoproj.io/refresh=hard --overwrite >/dev/null
     while :; do
@@ -36,8 +38,8 @@ for environment in dev staging prod; do
         ((SECONDS < deadline)) || fail "$environment: Argo reconciliation timeout; inspect Application conditions"
         sleep 3
     done
-    jq -e --arg env "$environment" --arg repo "$CONFIG_REPO_URL" '
-        .spec.source == {repoURL:$repo,targetRevision:"main",path:("apps/be-service/envs/"+$env)} and
+    jq -e --arg env "$environment" --arg repo "$CONFIG_REPO_URL" --arg branch "$branch" '
+        .spec.source == {repoURL:$repo,targetRevision:$branch,path:("apps/be-service/envs/"+$env)} and
         .spec.destination.namespace == $env' <<< "$app" >/dev/null || fail "$environment: wrong Argo source/namespace"
     deployment=$(k -n "$environment" get deployment be-service -o json)
     jq -e --argjson replicas "$replicas" --arg image "$image" '
@@ -62,8 +64,8 @@ for environment in dev staging prod; do
     jq -e --arg env "$environment" --arg version "$version" --arg sha "$source_sha" '
         .env == $env and .version == $version and .git_commit == $sha
         ' <<< "$response" >/dev/null || fail "$environment: wrong HTTP version/commit"
-    echo "[PASS] $environment: GitHub main, Argo health, runtime image, $replicas replicas, version $version"
+    echo "[PASS] $environment: GitHub $branch, Argo health, runtime image, $replicas replicas, version $version"
+    releases=$(jq --arg env "$environment" --arg branch "$branch" --arg image "$image" --arg revision "$revision" --arg source_sha "$source_sha" --arg version "$version" '. + {($env):{branch:$branch,image:$image,revision:$revision,source_sha:$source_sha,version:$version}}' <<< "$releases")
 done
-jq -n --arg image "$image" --arg revision "$revision" --arg source_sha "$source_sha" --arg version "$version" \
-    '$ARGS.named' | write_state release.json
+jq -n --argjson environments "$releases" '{environments:$environments}' | write_state release.json
 echo "Argo CD: http://localhost:$HTTP_PORT/ (admin)"

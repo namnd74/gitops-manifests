@@ -29,7 +29,7 @@ class VerifyImageTest(unittest.TestCase):
             file.chmod(0o755)
 
     def verify(self, ref=REF, repo='example/be-service'):
-        return subprocess.run(['bash', str(ROOT/'scripts/verify-image.sh'), ref, repo],
+        return subprocess.run(['bash', str(ROOT/'scripts/verify-image.sh'), ref, repo, 'dev'],
                               env=self.env, capture_output=True, text=True)
 
     def calls(self):
@@ -64,9 +64,9 @@ class VerifyImageTest(unittest.TestCase):
     def test_verifies_digest_source_sha_main_and_signer(self):
         result = self.verify()
         self.assertEqual(result.returncode, 0, result.stderr)
-        for required in (REF, '--source-digest '+SHA, '--source-ref refs/heads/main',
+        for required in (REF, '--source-digest '+SHA, '--source-ref refs/heads/dev',
                          '--signer-workflow example/be-service/.github/workflows/ci.yaml',
-                         'ci.yaml@refs/heads/main', 'https://token.actions.githubusercontent.com'):
+                         'ci.yaml@refs/heads/dev', 'https://token.actions.githubusercontent.com'):
             self.assertIn(required, self.calls())
 
 if __name__ == '__main__':

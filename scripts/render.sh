@@ -10,7 +10,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=local-common.sh
 source "$SCRIPT_DIR/local-common.sh"
 init_local
-# Bootstrap only: create cluster secrets and Argo Applications tracking GitHub main.
+# Bootstrap only: create cluster secrets and Argo Applications tracking their GitHub environment branches.
 require_tools kubeseal yq od
 bootstrap="$STATE_DIR/bootstrap"
 mkdir -p "$bootstrap/applications" "$bootstrap/secrets"
@@ -26,12 +26,13 @@ for environment in dev staging prod; do
     cp "$cached" "$bootstrap/secrets/$environment-sealed.yaml"
     yq -i '.metadata.annotations."argocd.argoproj.io/sync-options" = "Prune=false"' \
         "$bootstrap/secrets/$environment-sealed.yaml"
-    ENVIRONMENT="$environment" yq '
+    RELEASE_BRANCH=$(branch_for_env "$environment") ENVIRONMENT="$environment" yq '
         .metadata.name = "be-service-" + strenv(ENVIRONMENT) |
         .spec.source.repoURL = strenv(CONFIG_REPO_URL) |
+        .spec.source.targetRevision = strenv(RELEASE_BRANCH) |
         .spec.source.path = "apps/be-service/envs/" + strenv(ENVIRONMENT) |
         .spec.destination.namespace = strenv(ENVIRONMENT)
         ' "$SCRIPT_DIR/templates/application.yaml" > "$bootstrap/applications/be-service-$environment.yaml"
 done
-jq -n --arg repo "$CONFIG_REPO_URL" '{repoURL:$repo,targetRevision:"main"}' | write_state bootstrap.json
-echo "[PASS] render: bootstrap secrets and Applications for $CONFIG_REPO_URL (main)"
+jq -n --arg repo "$CONFIG_REPO_URL" '{repoURL:$repo,branches:["dev","stg","prod"]}' | write_state bootstrap.json
+echo "[PASS] render: bootstrap secrets and Applications for $CONFIG_REPO_URL (dev/stg/prod)"

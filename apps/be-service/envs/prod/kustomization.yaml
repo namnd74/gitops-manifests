@@ -12,3 +12,7 @@ patches:
   - path: deployment-env-patch.yaml
 resources:
   - ../../base
+configMapGenerator:
+  - name: be-service-config
+    envs:
+      - environment.env

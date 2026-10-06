@@ -94,7 +94,7 @@ esac
                 app = subprocess.check_output(['yq','-o=json','.',str(self.root/f'.local/bootstrap/applications/be-service-{env}.yaml')],text=True)
                 source = json.loads(app)['spec']['source']
                 self.assertEqual(source['repoURL'], 'https://github.com/example/gitops-manifests.git')
-                self.assertEqual(source['targetRevision'], 'main')
+                self.assertEqual(source['targetRevision'], 'stg' if env == 'staging' else env)
                 self.assertEqual(source['path'], f'apps/be-service/envs/{env}')
                 secret = self.root/f'.local/bootstrap/secrets/{env}-sealed.yaml'
                 self.assertTrue(secret.exists())
@@ -124,6 +124,7 @@ esac
             self.assertIn(f'bootstrap/secrets/{env}-sealed.yaml', invoked)
             self.assertIn(f'bootstrap/applications/be-service-{env}.yaml', invoked)
         self.assertIn('argocd.argoproj.io/tracking-id-', invoked)
+        self.assertIn('wait --for=condition=Synced sealedsecret/be-service-secret', invoked)
 
     def test_build_configures_release_variables_and_dispatches_github_ci(self):
         calls = self.root/'gh-calls'
@@ -137,7 +138,7 @@ fi
         invoked=calls.read_text()
         self.assertIn('variable set ENABLE_GITOPS_RELEASE --repo example/be-service --body true',invoked)
         self.assertIn('variable set IMAGE_ARCH --repo example/be-service --body arm64',invoked)
-        self.assertIn('workflow run ci.yaml --repo example/be-service --ref main',invoked)
+        self.assertIn('workflow run ci.yaml --repo example/be-service --ref dev',invoked)
         calls.unlink()
         result=self.run_script('build.sh',MISSING_SECRET='1')
         self.assertNotEqual(result.returncode,0)
@@ -153,10 +154,14 @@ fi
                      ['config','commit.gpgsign','false'],['add','apps'],['commit','-qm','release'],['branch','-M','main']):
             subprocess.run(['git','-C',str(self.root),*args],check=True)
         revision=subprocess.check_output(['git','-C',str(self.root),'rev-parse','HEAD'],text=True).strip()
+        for branch in ('dev','stg','prod'):
+            subprocess.run(['git','-C',str(self.root),'branch',branch],check=True)
         real_git=shutil.which('git')
         self.fixture('git', '''
 if [[ " $* " == *' clone '* ]]; then
-  exec "$REAL_GIT" clone --quiet --branch main "$FIXTURE_REPO" "${!#}"
+  branch=''
+  for ((i=1;i<=$#;i++)); do if [[ "${!i}" == --branch ]]; then j=$((i+1)); branch=${!j}; fi; done
+  exec "$REAL_GIT" clone --quiet --branch "$branch" "$FIXTURE_REPO" "${!#}"
 fi
 exec "$REAL_GIT" "$@"
 ''')
@@ -178,7 +183,7 @@ while (($#)); do
   esac
 done
 case "$kind" in
-application) jq -n --arg env "$namespace" --arg revision "$REVISION" '{spec:{source:{repoURL:"https://github.com/example/gitops-manifests.git",targetRevision:"main",path:("apps/be-service/envs/"+$env)},destination:{namespace:$env}},status:{sync:{status:"Synced",revision:$revision},health:{status:"Healthy"}}}' ;;
+application) jq -n --arg env "$namespace" --arg revision "$REVISION" '{spec:{source:{repoURL:"https://github.com/example/gitops-manifests.git",targetRevision:(if $env == "staging" then "stg" else $env end),path:("apps/be-service/envs/"+$env)},destination:{namespace:$env}},status:{sync:{status:"Synced",revision:$revision},health:{status:"Healthy"}}}' ;;
 deployment) jq -n --arg env "$namespace" '{spec:{replicas:({dev:1,staging:2,prod:3}[$env]),template:{spec:{containers:[{image:("ghcr.io/example/be-service@sha256:"+("a"*64))}]}}}}' ;;
 pods) jq -n --arg env "$namespace" --arg id "${POD_ID:-d}" '{items:[range({dev:1,staging:2,prod:3}[$env]) | {metadata:{},spec:{nodeName:"node-1",containers:[{image:("ghcr.io/example/be-service@sha256:"+("a"*64))}]},status:{containerStatuses:[{ready:true,imageID:("containerd://sha256:"+($id*64))}]}}]}' ;;
 esac
@@ -196,9 +201,9 @@ else echo OK; fi
         for env in ('dev','staging','prod'):
             self.assertIn('[PASS] '+env,result.stdout)
         release=json.loads((self.root/'.local/release.json').read_text())
-        self.assertEqual(release['image'],image)
-        self.assertEqual(release['revision'],revision)
-        self.assertEqual(release['source_sha'],'b'*40)
+        self.assertEqual(release['environments']['dev']['image'],image)
+        self.assertEqual(release['environments']['dev']['revision'],revision)
+        self.assertEqual(release['environments']['dev']['source_sha'],'b'*40)
         result=self.run_script('check.sh',POD_ID='c')
         self.assertNotEqual(result.returncode,0)
         self.assertIn('runtime image content mismatch',result.stderr)

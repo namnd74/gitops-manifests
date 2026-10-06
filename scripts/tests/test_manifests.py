@@ -19,12 +19,33 @@ class ManifestTest(unittest.TestCase):
             if (ROOT/name).exists():
                 shutil.copy(ROOT/name, self.root/name)
 
+        self.edit('apps/be-service/base/kustomization.yaml', '.images = [{"name":"ghcr.io/example/be-service","newTag":"bootstrap"}]')
+
     def edit(self, path, expression):
         subprocess.run(['yq', '-i', expression, str(self.root/path)], check=True)
 
     def validate(self):
         return subprocess.run(['bash', str(self.root/'scripts/validate-manifests.sh')],
                               capture_output=True, text=True, env=dict(os.environ, IMAGE="ghcr.io/example/be-service"))
+
+    def test_each_environment_loads_its_own_configmap(self):
+        for environment in ('dev', 'staging', 'prod'):
+            rendered = subprocess.check_output(['kustomize', 'build', str(self.root/f'apps/be-service/envs/{environment}')], text=True)
+            objects = subprocess.check_output(['yq', '-o=json', '.', '-'], input=rendered, text=True)
+            import json
+            decoder = json.JSONDecoder()
+            parsed = []
+            while objects.strip():
+                item, length = decoder.raw_decode(objects.lstrip())
+                parsed.append(item)
+                objects = objects.lstrip()[length:]
+            self.assertTrue(any(o["kind"] == "ConfigMap" for o in parsed))
+            config = next(o for o in parsed if o['kind'] == 'ConfigMap')
+            deployment = next(o for o in parsed if o['kind'] == 'Deployment')
+            container = deployment['spec']['template']['spec']['containers'][0]
+            self.assertEqual(config['data']['APP_ENV'], environment)
+            self.assertEqual(container['envFrom'], [{'configMapRef': {'name': config['metadata']['name']}}])
+            self.assertEqual([e['name'] for e in container['env']], ['DB_PASSWORD'])
 
     def test_all_overlays_inherit_branch_release_digest(self):
         self.edit('apps/be-service/base/kustomization.yaml',
@@ -40,18 +61,31 @@ class ManifestTest(unittest.TestCase):
     def test_accepts_dev_fault_without_release_metadata(self):
         for env in ('dev', 'staging', 'prod'):
             self.edit(f'apps/be-service/envs/{env}/kustomization.yaml', 'del(.commonAnnotations)')
-        self.edit('apps/be-service/envs/dev/deployment-env-patch.yaml',
-                  '(.spec.template.spec.containers[0].env[] | select(.name == "DEMO_FAULT").value) = "true"')
+        path = self.root/'apps/be-service/envs/dev/environment.env'
+        path.write_text(path.read_text().replace('DEMO_FAULT=false','DEMO_FAULT=true'))
         result = self.validate()
         self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_readiness_failure_requires_explicit_prod_seminar_marker(self):
+        path = 'apps/be-service/envs/prod/deployment-env-patch.yaml'
+        self.edit(path, '.spec.template.spec.containers[0].name = "app" | .spec.template.spec.containers[0].readinessProbe.httpGet.port = 8081')
+        self.assertNotEqual(self.validate().returncode, 0)
+        self.edit(path, '.metadata.annotations."seminar.gitops.io/scenario" = "prod-readiness-failure"')
+        result = self.validate()
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_readiness_demo_cannot_disable_liveness_or_old_pod_availability(self):
+        self.edit('apps/be-service/envs/prod/deployment-env-patch.yaml',
+                  '.metadata.annotations."seminar.gitops.io/scenario" = "prod-readiness-failure" | .spec.template.spec.containers[0].name = "app" | .spec.template.spec.containers[0].readinessProbe.httpGet.port = 8081 | .spec.template.spec.containers[0].livenessProbe.httpGet.port = 8081')
+        self.assertNotEqual(self.validate().returncode, 0)
 
     def test_rejects_wrong_replicas(self):
         self.edit('apps/be-service/envs/staging/deployment-env-patch.yaml', '.spec.replicas = 1')
         self.assertNotEqual(self.validate().returncode, 0)
 
     def test_rejects_prod_demo_mode(self):
-        self.edit('apps/be-service/envs/prod/deployment-env-patch.yaml',
-                  '(.spec.template.spec.containers[0].env[] | select(.name == "DEMO_MODE").value) = "true"')
+        path = self.root/'apps/be-service/envs/prod/environment.env'
+        path.write_text(path.read_text().replace('DEMO_MODE=false','DEMO_MODE=true'))
         self.assertNotEqual(self.validate().returncode, 0)
 
     def test_rejects_optional_secret(self):

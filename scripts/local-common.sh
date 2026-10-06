@@ -128,3 +128,7 @@ init_local() {
     load_config
     LOCAL_CONFIG=$(config_json)
 }
+
+branch_for_env() {
+    case "$1" in dev|prod) printf "%s" "$1" ;; staging) printf stg ;; *) fail "Unknown environment: $1" ;; esac
+}

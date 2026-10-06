@@ -28,20 +28,12 @@ spec:
             - containerPort: 8080
               name: http
           env:
-            - name: PORT
-              value: "8080"
-            - name: APP_ENV
-              value: "base"
             - name: DB_PASSWORD
               valueFrom:
                 secretKeyRef:
                   name: be-service-secret
                   key: DB_PASSWORD
                   optional: false
-            - name: DEMO_MODE
-              value: "false"
-            - name: DEMO_FAULT
-              value: "false"
           livenessProbe:
             httpGet:
               path: /healthz
@@ -71,3 +63,6 @@ spec:
               drop: ["ALL"]
             seccompProfile:
               type: RuntimeDefault
+          envFrom:
+            - configMapRef:
+                name: be-service-config
