@@ -54,6 +54,7 @@ git switch -c feature/seminar-release-b origin/dev
 
 Nếu worktree không sạch, dừng và xử lý thay đổi riêng trước.
 Trong `main.go`, đổi `ServiceName` thành `Backend API Service - Release B`.
+Nếu tiêu đề B đã được dùng, chọn tiêu đề khác để thấy thay đổi.
 Tăng patch version trong `VERSION` so với baseline (ví dụ v1.3.1 → v1.3.2).
 
 ```bash
@@ -256,3 +257,12 @@ production được khôi phục mà không build thủ công.”
 - Không merge lại PR image prod đã đóng trong demo; release tiếp theo phải được duyệt riêng.
 - Các nhánh demo dùng tên mới cho lần tiếp theo; baseline A/B là tên vai trò, không là version cố định.
 - Không chạy promote toàn bộ nhánh manifest; chỉ cập nhật artifact và cấu hình đích cần thiết.
+
+## Khi GitHub API tạo PR bị lỗi
+
+Nếu build/scan/publish/sign/attest đạt nhưng job tạo PR báo HTTP 5xx, deployment vẫn giữ nguyên.
+Đối chiếu log và xác nhận nhánh `release-be-service-<env>` đã được CI push; thử rerun **failed jobs**
+trên Actions, giữ nguyên artifact đã ký. Nếu API rerun cũng lỗi, dùng `gh pr create` với base nhánh đích
+và head nhánh release đã có; lấy digest/source/evidence từ log CI làm body PR.
+Chờ checks manifest (gồm signature/provenance) đạt trước khi merge. Không tự build Docker local,
+không bỏ checks, không xem một run có job thất bại là toàn bộ CI thành công.
