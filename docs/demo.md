@@ -1,5 +1,62 @@
 # Kịch bản seminar: ba môi trường, chặn build lỗi và rollback GitOps
 
+## Chạy tự động và tiếp tục khi bị ngắt
+
+Để script làm đúng các bước bên dưới, chạy ở repo manifest:
+
+```bash
+bash scripts/demo.sh --preflight
+bash scripts/demo.sh --count 1
+```
+
+Thay `1` bằng `10`, `100` hoặc `1000` để lặp tuần tự. Không cần dựng lại cluster;
+mỗi vòng ghi baseline mới, tự tăng patch version từ backend dev và dùng nhánh duy nhất.
+Các môi trường ban đầu **có thể khác version**: sau diễn tập, dev/staging có thể ở B còn prod ở A.
+Script lấy digest/version hiện tại của từng môi trường, không dùng lại các file baseline của lần cũ.
+
+Thứ tự tự động: feature PR → dev CI/image PR/deploy → dev-to-stg PR/CI/image PR/deploy →
+stg-to-prod PR/build lỗi → xác nhận prod không đổi → dispatch prod build đạt → PR readiness fault →
+xác nhận Argo Degraded và ba pod cũ còn phục vụ → PR revert toàn bộ fault merge → xác nhận rollback.
+Không bỏ qua checks hoặc signature/provenance gate trong CI manifest.
+
+Mỗi session lưu `.local/demos/SESSION/session.json`, `session.log`, hai clone riêng và thư mục
+`0001`, `0002`, … chứa state/PR/run/artifact/baseline/deployment/rollback evidence.
+State được ghi trước network write và checkpoint chỉ tiến sau khi kiểm chứng bước hoàn tất.
+
+```bash
+bash scripts/demo.sh --resume SESSION
+```
+
+Theo dõi chi tiết ở một Terminal khác bằng `tail -f .local/demos/SESSION/session.log`.
+
+Resume đọc số vòng đã lưu, tái sử dụng PR/commit/run; vòng đã hoàn thành không phát hành lại.
+Không sửa checkpoint để bỏ qua bước. Khi script dừng, đọc log và khắc phục nguyên nhân rồi resume.
+Mặc định mỗi lần chờ tối đa 3600 giây, poll 10 giây; có thể đặt `DEMO_WAIT_SECONDS`,
+`DEMO_POLL_SECONDS` là số nguyên dương khi chạy.
+
+Lưu ý khi bị gián đoạn:
+
+- Script cố đưa `DEMO_FAIL_PROD_BUILD=false` khi thoát sau khi đã dùng biến fault.
+  Nếu network không cho reset, script báo lệnh cần làm. Nếu prod fail run còn queued và đã nhận biến false,
+  resume có thể phát hiện build đạt ngoài kỳ vọng và dừng; không coi đó là demo thành công.
+- SIGKILL hoặc tắt máy không chạy cleanup. Xác nhận không còn runner trước khi xóa file
+  `.local/demos/lock/owner` và dùng `rmdir .local/demos/lock`; kiểm tra biến fault trên GitHub.
+- Dispatch có thể được nhận dù client mất response. Script không tự POST lần hai.
+  Nếu có nhiều dispatch ứng viên, kiểm tra SHA/event trên Actions rồi gắn run đúng:
+  `bash scripts/demo.sh --resume SESSION --dispatch-run RUN_ID`.
+  Nếu **không có run nào** sau khi xác nhận GitHub không nhận POST, xóa riêng
+  `000N/dispatch-intent.json` của vòng bị ngắt rồi resume. Không xóa marker khi run còn queued.
+- Build/scan/sign/attest đạt nhưng tạo PR lỗi: runner chỉ phục hồi từ artifact và release branch CI đã push,
+  kiểm tra đúng digest/source/version và vẫn chờ manifest CI. Run lỗi được giữ trong evidence.
+- Dành riêng cả hai repo và cluster cho demo trong session; local lock không khóa người dùng máy khác.
+  Thay đổi ngoài runner hoặc branch protection mới có thể làm script dừng để bạn xử lý.
+- Các clone runtime/checkpoints cần giữ để resume. Không xóa `.local/demos` giữa session.
+
+Mỗi vòng dùng bốn CI build backend (dev, stg, prod cố ý fail, prod dispatch), cùng CI cho PRs.
+Số vòng lớn tiêu thụ quota và dung lượng artifact; không tự động xóa Git history/package/evidence.
+Các test dùng Git thật trên repo tạm và API/cluster giả lập; không thay thế một lần chạy end-to-end
+trên GitHub/Argo của bên triển khai. Hãy chạy `--count 1` trước khi chọn số vòng lớn.
+
 ## Flow và điều kiện bắt đầu
 
 Backend: `feature → dev → stg → prod`. Mỗi nhánh tự build image riêng.
@@ -12,7 +69,8 @@ Hai tình huống độc lập:
 2. **Build prod pass, rollout fail:** PR đưa image mới cùng readiness probe lỗi lên prod;
    PR revert khôi phục image/cấu hình cũ, Argo tự rollback. Không build lại image rollback.
 
-Chuẩn bị theo README, phát hành baseline A cho cả ba nhánh và chạy `bash scripts/check.sh` đạt.
+Chuẩn bị theo README và chạy `bash scripts/check.sh` đạt. A là baseline riêng của từng môi trường;
+không bắt buộc cả ba đang chạy cùng version.
 Secrets/Variables đầy đủ, GHCR truy cập được, `DEMO_FAIL_PROD_BUILD` false hoặc chưa đặt.
 Không có PR release cũ chưa xử lý; không có người khác cập nhật các nhánh trong khi trình diễn.
 Bắt đầu Terminal Bash tại repo manifest; không dùng branch name đã tồn tại từ lần demo trước.

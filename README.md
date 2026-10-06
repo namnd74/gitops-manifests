@@ -46,6 +46,9 @@ scripts/build.sh           Cấu hình GitHub Variables, trigger CI khi bootstra
 scripts/render.sh          Chuẩn bị sealed secrets và Argo Applications
 scripts/deploy.sh          Apply bootstrap; kiểm tra controller đã tạo Secret
 scripts/check.sh           Kiểm chứng Git revision, image/runtime, replica và HTTP
+scripts/demo.sh            Chạy/resume kịch bản release + failure + rollback nhiều vòng
+scripts/demo-cycle.sh      Các bước và checkpoint của một vòng demo
+scripts/demo-github.sh     Chờ CI/checks, tạo và merge PR đúng commit
 scripts/local-common.sh    Hàm Bash dùng chung
 scripts/local-dev.sh       Lệnh tắt up/status/down
 scripts/tests/             Test hành vi bootstrap, manifests và release gates
@@ -54,6 +57,41 @@ scripts/tests/             Test hành vi bootstrap, manifests và release gates
 
 Runtime dùng Bash và CLI. Python chỉ dùng để chạy tests, không dùng dựng cluster.
 Hướng dẫn trình diễn đầy đủ: [docs/demo.md](docs/demo.md).
+
+## Chạy demo tự động nhiều lần
+
+Sau khi bootstrap và ba môi trường Healthy, chạy tại repo manifest:
+
+```bash
+bash scripts/demo.sh --preflight
+bash scripts/demo.sh --count 1
+# Những lựa chọn khác cho một session mới:
+bash scripts/demo.sh --count 10
+bash scripts/demo.sh --count 100
+bash scripts/demo.sh --count 1000
+```
+
+Chọn **một** lệnh count; script thực sự push source, tạo/merge PR và dùng GitHub Actions.
+Mỗi vòng tự tăng patch VERSION, dùng tên feature/fault/rollback riêng, ghi baseline của từng môi trường,
+release dev rồi staging, kiểm chứng prod build fail, publish prod, gây lỗi readiness và rollback bằng PR revert.
+Kết thúc vòng: dev/staging chạy version mới; prod trở về digest/cấu hình lúc bắt đầu vòng.
+Không cần xóa cluster, reset lịch sử hay chỉnh version thủ công giữa các lần chạy.
+
+Script in SESSION và lưu checkpoint/log/evidence trong `.local/demos/SESSION/` (gitignored).
+Nếu bị ngắt hoặc lỗi ngoài kịch bản, tiếp tục **session cũ**, không tạo một session mới:
+
+```bash
+bash scripts/demo.sh --resume SESSION
+```
+
+Thay `SESSION` bằng ID script đã in. Chỉ chạy một runner, dành riêng nhánh release trong lúc demo;
+không merge PR hoặc trigger CI khác song song. Script merge sau khi tất cả checks đạt, không bypass
+branch protection; nếu quy định yêu cầu người review thì review/merge trên GitHub rồi resume.
+Checkout source của bạn giữ nguyên; các commit demo tạo trong clone riêng dưới thư mục session.
+
+1000 vòng có thể chạy lâu và dùng nhiều quota Actions/GHCR. Script hỗ trợ số vòng đó nhưng dừng khi
+GitHub, mạng, security gate hoặc cluster không đáp ứng kỳ vọng; không thể bảo đảm dịch vụ bên ngoài
+luôn hoạt động. Bằng chứng kiểm thử và cách xử lý interruption xem [kịch bản demo](docs/demo.md#chạy-tự-động-và-tiếp-tục-khi-bị-ngắt).
 
 ## Dựng từ đầu
 
