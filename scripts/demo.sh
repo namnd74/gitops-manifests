@@ -2,7 +2,10 @@
 # Operate the lab; releases and promotion remain in GitHub Actions / Git.
 set -Eeuo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-CONTEXT=k3d-gitops-demo
+CONTEXT=${CONTEXT:-k3d-gitops-demo}
+SOURCE_REPO=${SOURCE_REPO:-}
+CONFIG_REPO_URL=${CONFIG_REPO_URL:-}
+IMAGE=${IMAGE:-ghcr.io/example/be-service}
 K=(kubectl --context "$CONTEXT" --request-timeout=20s)
 usage() {
     cat <<'USAGE'
@@ -54,6 +57,7 @@ case "$command" in
     done
     ;;
  connect)
+    : "${SOURCE_REPO:?Set SOURCE_REPO=owner/be-service}" "${CONFIG_REPO_URL:?Set CONFIG_REPO_URL to your GitHub config repository}"
     require gh; require git
     gh auth status
     cd "$ROOT"
@@ -66,13 +70,15 @@ case "$command" in
         branch_root="$temporary/$env"
         bash "$branch_root/scripts/validate-manifests.sh"
         application="$branch_root/argocd/applications/be-service-$env.yaml"
+        export CONFIG_REPO_URL DEPLOY_BRANCH="$env"
+        yq -i ' .spec.source.repoURL = strenv(CONFIG_REPO_URL) | .spec.source.targetRevision = strenv(DEPLOY_BRANCH)' "$application"
         [[ "$(yq -er '.spec.source.targetRevision' "$application")" == "$env" ]] || { echo "Wrong Argo branch for $env" >&2; exit 1; }
         ref=$(kustomize build "$branch_root/apps/be-service/envs/$env" | yq -er 'select(.kind == "Deployment" and .metadata.name == "be-service") | .spec.template.spec.containers[0].image')
-        if [[ "$env" != dev && "$ref" == ghcr.io/namnd74/be-service:sha-9912c6b ]]; then
+        if [[ "$env" != dev && "$ref" == ghcr.io/example/be-service:bootstrap ]]; then
             echo "[SKIP] $env has no promoted digest yet; run connect again after promotion"
             continue
         fi
-        bash "$ROOT/scripts/verify-image.sh" "$ref" namnd74/be-service
+        bash "$ROOT/scripts/verify-image.sh" "$ref" "$SOURCE_REPO"
         kubeseal --context "$CONTEXT" --validate < "$branch_root/apps/be-service/envs/$env/sealed-secret.yaml"
         applications+=("$application")
     done
@@ -84,6 +90,7 @@ case "$command" in
     for env in dev staging prod; do "${K[@]}" -n "$env" get deployment be-service --ignore-not-found; done
     ;;
  check)
+    : "${SOURCE_REPO:?Set SOURCE_REPO=owner/be-service}" "${CONFIG_REPO_URL:?Set CONFIG_REPO_URL to your GitHub config repository}"
     env=${2:?Usage: demo.sh check dev|staging|prod}
     case "$env" in dev|staging|prod) ;; *) echo 'Invalid environment' >&2; exit 2 ;; esac
     cd "$ROOT"
@@ -102,13 +109,13 @@ case "$command" in
     "${K[@]}" -n argocd get application "be-service-$env" -o json > "$temporary/app.json"
     "${K[@]}" -n "$env" get deployment be-service -o json > "$temporary/deploy.json"
     "${K[@]}" -n "$env" get pods -l app=be-service -o json > "$temporary/pods.json"
-    python3 - "$env" "$temporary" "$revision" "$host" <<'PY_CHECK'
+    python3 - "$env" "$temporary" "$revision" "$host" "$CONFIG_REPO_URL" "$SOURCE_REPO" <<'PY_CHECK'
 import json,sys,pathlib
 from urllib.request import urlopen
-env,directory,head,host=sys.argv[1:]; directory=pathlib.Path(directory)
+env,directory,head,host,repo_url,source_repo=sys.argv[1:]; directory=pathlib.Path(directory)
 def read(name): return json.loads((directory/(name+'.json')).read_text())
 a=read('app'); d=read('deploy'); desired=read('desired'); labels=read('image')['config']['Labels']
-assert a['spec']['source']['repoURL']=='https://github.com/namnd74/gitops-manifests.git', 'Argo still uses a local mirror'
+assert a['spec']['source']['repoURL']==repo_url, 'Argo still uses a local mirror'
 assert a['status']['sync']['status']=='Synced' and a['status']['health']['status']=='Healthy', 'Argo not Synced/Healthy'
 assert a['spec']['source']['targetRevision']==env, 'Argo tracks the wrong environment branch'
 assert a['status']['sync']['revision']==head, 'Argo has not reconciled the environment branch head'
@@ -124,7 +131,7 @@ with urlopen('http://'+host+'/healthz',timeout=5) as response: assert response.s
 with urlopen('http://'+host+'/version',timeout=5) as response: v=json.load(response)
 assert v['git_commit']==labels['org.opencontainers.image.revision'], 'Runtime source SHA differs from image'
 assert v['version']==labels['org.opencontainers.image.version'] and v['env']==env, 'Runtime version/environment differs'
-assert labels['org.opencontainers.image.source']=='https://github.com/namnd74/be-service', 'Unexpected image source'
+assert labels['org.opencontainers.image.source']=='https://github.com/'+source_repo, 'Unexpected image source'
 print(f'[PASS] {env}: Git revision, Argo health, runtime digest and version match')
 PY_CHECK
     ;;

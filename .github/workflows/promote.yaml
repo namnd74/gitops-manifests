@@ -9,8 +9,8 @@ concurrency:
   group: gitops-release-${{ inputs.to }}
   cancel-in-progress: false
 env:
-  SOURCE_REPO: namnd74/be-service
-  IMAGE: ghcr.io/namnd74/be-service
+  SOURCE_REPO: ${{ vars.SOURCE_REPO || format('{0}/be-service', github.repository_owner) }}
+  IMAGE: ${{ vars.IMAGE || format('ghcr.io/{0}/be-service', github.repository_owner) }}
 jobs:
   promote:
     runs-on: ubuntu-latest

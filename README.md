@@ -1,28 +1,48 @@
-# GitOps manifests: ba nhánh môi trường
+# GitOps local dev
 
-Repo cấu hình có ba nhánh triển khai: `dev`, `staging`, `prod`. Argo CD
-`be-service-dev`, `be-service-staging`, `be-service-prod` theo dõi nhánh cùng
-tên và overlay tương ứng. `main` giữ cấu hình bootstrap và workflow mặc định.
-
-BE CI build/scan/publish/ký một image từ `be-service/main`, rồi mở PR cập nhật
-`apps/be-service/base/kustomization.yaml` vào config `dev`. Promotion mở PR
-trực tiếp `dev → staging`, `staging → prod`; merge commit giữ lịch sử và digest,
-không rebuild. Ba overlay giữ namespace, host, replicas và secret riêng.
-
-- [Hướng dẫn dựng lại và demo merge release](scripts/rebuild-step-by-step.md)
-- [Runbook release, fault và rollback](scripts/demo-runbook.md)
-- [Kế hoạch chuyển sang ba nhánh](docs/superpowers/plans/2026-10-06-three-branches.md)
+Clone `be-service` và `gitops-manifests` cạnh nhau, dùng nhánh `main` ở cả hai repo.
+Lệnh dưới đây build backend từ source local, dựng cluster k3d, cài Argo CD và
+Sealed Secrets, rồi triển khai ba overlay `dev`, `staging`, `prod` với 1/2/3 replica.
+Không cần tài khoản GitHub, registry riêng hoặc PAT để chạy local.
 
 ```bash
-bash scripts/demo.sh doctor
-bash scripts/demo.sh setup
-bash scripts/demo.sh seal
-bash scripts/demo.sh connect
-bash scripts/demo.sh status
-bash scripts/demo.sh check dev
+cp .env.local.example .env.local
+bash scripts/local-dev.sh up
+bash scripts/local-dev.sh check
 ```
 
-`connect/check` đọc snapshot từ remote branch của từng môi trường. `connect`
-không tạo Application cho Staging/Prod còn bootstrap, và yêu cầu Dev có digest
-đã xác minh. Chạy lại sau promotion đầu tiên. Tag bootstrap không phải release.
-Giữ `.demo/` cũ; không tự động xóa cluster, registry, Git server hoặc backup.
+Cần Docker đang chạy, Bash, Python 3, Git, k3d, kubectl, kubeseal,
+Kustomize và **Mike Farah yq v4**. Máy phải có Internet khi tải image và controller.
+Image backend build cho `amd64` hoặc `arm64` theo Docker host.
+
+Argo CD: <http://localhost:8088>. Backend:
+<http://dev.127.0.0.1.nip.io:8088/version>,
+<http://staging.127.0.0.1.nip.io:8088/version>,
+<http://prod.127.0.0.1.nip.io:8088/version>.
+Đọc [hướng dẫn dựng từng bước](scripts/rebuild-step-by-step.md) để lấy mật khẩu,
+đổi port, chạy lại sau khi sửa source và xử lý lỗi.
+
+Argo CD đọc Git snapshot nội bộ trên `main`, trong `.local/`, qua Git server
+chỉ đọc trong cluster. Các manifest đã render và sealed secret được tạo riêng
+cho máy/cluster; `.local/` và `.env.local` không được đưa vào Git. `up` không
+commit hoặc push repo source. Chạy lại `up` để build và cập nhật snapshot.
+Ba môi trường local cùng nhận image mới; tên `prod` ở đây là môi trường demo local.
+
+```mermaid
+flowchart LR
+    S[Backend source: main] --> L[local-dev.sh up]
+    L --> B[Docker build native image]
+    B --> I[k3d image import]
+    L --> M[Render manifests + seal secrets]
+    M --> G[Local Git snapshot: main]
+    G --> A[Argo CD pull and sync]
+    I --> K[Local Kubernetes]
+    A --> K
+    K --> D[dev: 1 replica]
+    K --> T[staging: 2 replicas]
+    K --> P[prod: 3 replicas]
+```
+
+[Runbook](scripts/demo-runbook.md) có các lệnh vận hành và cấu hình GitHub/GHCR
+nếu cần demo release có ký, provenance và promotion qua nhánh môi trường.
+Flow GitHub này cần cấu hình riêng; CI mặc định không phát hành hoặc cập nhật repo khác.

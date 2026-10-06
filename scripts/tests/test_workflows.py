@@ -7,7 +7,7 @@ import tempfile
 import unittest
 
 ROOT = pathlib.Path(__file__).resolve().parents[2]
-IMAGE = 'ghcr.io/namnd74/be-service'
+IMAGE = 'ghcr.io/example/be-service'
 
 class ReleaseWorkflowTest(unittest.TestCase):
     def setUp(self):
@@ -19,7 +19,7 @@ class ReleaseWorkflowTest(unittest.TestCase):
         # Registry verification has its own failure-path tests; these tests use real Git and Kustomize.
         (self.root/'scripts/verify-image.sh').write_text(
             '#!/bin/sh\nprintf "%s\\n" "$1" >> "$CALLS"\nexit "${VERIFY_EXIT:-0}"\n')
-        self.env = dict(os.environ, IMAGE=IMAGE, SOURCE_REPO='namnd74/be-service',
+        self.env = dict(os.environ, IMAGE=IMAGE, SOURCE_REPO='example/be-service',
                         RUNNER_TEMP=str(self.root), CALLS=str(self.root/'calls'))
         self.git('init', '-q')
         self.git('config', 'user.name', 'Test')
@@ -47,6 +47,7 @@ class ReleaseWorkflowTest(unittest.TestCase):
     def promotion_target(self):
         self.git('add', 'apps', 'argocd')
         self.git('commit', '-qm', 'target baseline')
+        self.git('update-ref', 'refs/remotes/origin/main', 'HEAD')
         self.git('update-ref', 'refs/remotes/origin/dev', 'HEAD')
         self.git('update-ref', 'refs/remotes/origin/staging', 'HEAD')
         self.git('update-ref', 'refs/remotes/origin/prod', 'HEAD')
@@ -148,6 +149,30 @@ class ReleaseWorkflowTest(unittest.TestCase):
         self.assertNotEqual(result.returncode, 0)
         self.assertIn('Rollback target is faulted', result.stderr)
         self.assertFalse((self.root/'calls').exists())
+
+    def test_main_release_pr_verifies_digest_for_dev_overlay(self):
+        self.promotion_target()
+        self.pin('dev', 'a')
+        result = self.prepare('validate', 'Validate release branch PR',
+                              BASE_ENV='main', HEAD_BRANCH='release-be-service-main')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn(IMAGE+'@sha256:'+'a'*64, (self.root/'calls').read_text())
+
+    def test_restore_updates_original_template_mapping_for_another_registry_owner(self):
+        self.env['IMAGE'] = 'ghcr.io/team/backend'
+        base = self.root/'apps/be-service/base'
+        subprocess.run(['kustomize', 'edit', 'set', 'image',
+                        IMAGE+'='+self.env['IMAGE']+'@sha256:'+'a'*64], cwd=base, check=True)
+        self.git('add', 'apps', 'argocd')
+        self.git('commit', '-qm', 'custom hosted release')
+        good = self.git('rev-parse', 'HEAD')
+        subprocess.run(['kustomize', 'edit', 'set', 'image',
+                        IMAGE+'='+self.env['IMAGE']+'@sha256:'+'b'*64], cwd=base, check=True)
+        result = self.prepare('rollback', 'Prepare verified restore', RESTORE_ENV='dev', REVISION=good)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        rendered = subprocess.check_output(['kustomize', 'build', 'apps/be-service/envs/dev'],
+                                            cwd=self.root, text=True)
+        self.assertIn(self.env['IMAGE']+'@sha256:'+'a'*64, rendered)
 
     def test_dev_release_pr_cannot_change_environment_configuration(self):
         self.promotion_target()

@@ -12,8 +12,8 @@ concurrency:
   group: gitops-release-${{ inputs.env }}
   cancel-in-progress: false
 env:
-  SOURCE_REPO: namnd74/be-service
-  IMAGE: ghcr.io/namnd74/be-service
+  SOURCE_REPO: ${{ vars.SOURCE_REPO || format('{0}/be-service', github.repository_owner) }}
+  IMAGE: ${{ vars.IMAGE || format('ghcr.io/{0}/be-service', github.repository_owner) }}
 jobs:
   restore:
     runs-on: ubuntu-latest
@@ -48,10 +48,11 @@ jobs:
           directory="apps/be-service/envs/$RESTORE_ENV"
           # Restore only the shared image reference and this environment's patch.
           git show "$REVISION:apps/be-service/base/kustomization.yaml" > "$RUNNER_TEMP/base.yaml"
-          old_digest=$(yq -er '.images[] | select(.name == env(IMAGE)) | .digest' "$RUNNER_TEMP/base.yaml")
+          old_digest=$(yq -er '.images[] | select(.newName == env(IMAGE) or .name == env(IMAGE)) | .digest' "$RUNNER_TEMP/base.yaml")
           [[ "$old_digest" =~ ^sha256:[0-9a-f]{64}$ ]] || { echo 'Rollback requires a digest revision' >&2; exit 1; }
           git show "$REVISION:$directory/deployment-env-patch.yaml" > "$RUNNER_TEMP/patch.yaml"
-          (cd apps/be-service/base && kustomize edit set image "$IMAGE=$IMAGE@$old_digest")
+          template=$(yq -er '.images[0].name' apps/be-service/base/kustomization.yaml)
+          (cd apps/be-service/base && kustomize edit set image "$template=$IMAGE@$old_digest")
           cp "$RUNNER_TEMP/patch.yaml" "$directory/deployment-env-patch.yaml"
           bash scripts/validate-manifests.sh
           restored=$(kustomize build "$directory")
@@ -73,5 +74,5 @@ jobs:
           body: |
             Config revision: `${{ inputs.revision }}`
             Artifact: `${{ steps.release.outputs.image_ref }}`
-            Source: https://github.com/namnd74/be-service/commit/${{ steps.release.outputs.source_sha }}
+            Source: https://github.com/${{ env.SOURCE_REPO }}/commit/${{ steps.release.outputs.source_sha }}
             Signature and provenance verified. Secret ciphertext is unchanged.

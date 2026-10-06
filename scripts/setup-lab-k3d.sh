@@ -9,7 +9,9 @@ for option in "$@"; do
 done
 # shellcheck disable=SC1091
 source "$SCRIPT_DIR/tool-versions.env"
-CLUSTER_NAME=gitops-demo
+CLUSTER_NAME=${CLUSTER_NAME:-gitops-demo}
+HTTP_PORT=${HTTP_PORT:-80}
+HTTPS_PORT=${HTTPS_PORT:-443}
 CONTEXT="k3d-$CLUSTER_NAME"
 trap 'echo "[ERROR] Setup stopped at line $LINENO; no success is assumed." >&2' ERR
 info() { echo "[INFO] $*"; }
@@ -17,9 +19,11 @@ for tool in docker kubectl k3d python3; do
     command -v "$tool" >/dev/null || { echo "Missing tool: $tool" >&2; exit 1; }
 done
 docker info >/dev/null
-if ! k3d cluster list -o json | python3 -c 'import json,sys;sys.exit(0 if any(x["name"]=="gitops-demo" for x in json.load(sys.stdin)) else 1)'; then
+if ! k3d cluster list -o json | python3 -c 'import json,sys;sys.exit(0 if any(x["name"]==sys.argv[1] for x in json.load(sys.stdin)) else 1)' "$CLUSTER_NAME"; then
+    volumes=()
+    if [[ -n "${LOCAL_GIT_VOLUME:-}" ]]; then volumes+=(--volume "$LOCAL_GIT_VOLUME:/gitops-source@server:0"); fi
     k3d cluster create "$CLUSTER_NAME" --image "$K3S_IMAGE" --servers 1 --agents 2 \
-        --port '127.0.0.1:80:80@loadbalancer' --port '127.0.0.1:443:443@loadbalancer' \
+        --port "127.0.0.1:$HTTP_PORT:80@loadbalancer" --port "127.0.0.1:$HTTPS_PORT:443@loadbalancer" "${volumes[@]}" \
         --k3s-arg '--disable=traefik@server:0' --wait
 fi
 K=(kubectl --context "$CONTEXT" --request-timeout=30s)
@@ -45,5 +49,5 @@ done
 "${K[@]}" rollout status statefulset/argocd-application-controller -n argocd --timeout=300s
 "${K[@]}" apply -f "$SCRIPT_DIR/argocd-ingress.yaml"
 echo '[OK] Infrastructure ready. No application release or config file was changed.'
-echo 'Next: bash scripts/demo.sh seal; commit/push the config repo; run BE CI; then bash scripts/demo.sh connect.'
-echo 'Argo CD: http://localhost (admin password: see the runbook).'
+echo 'Next: use scripts/local-dev.sh up for the complete local flow, or configure the hosted runbook.'
+echo "Argo CD: http://localhost:$HTTP_PORT (admin password: see the runbook)."

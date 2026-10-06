@@ -22,7 +22,7 @@ spec:
     spec:
       containers:
         - name: app
-          image: ghcr.io/namnd74/be-service:v1.0.0
+          image: ghcr.io/example/be-service:v1.0.0
           imagePullPolicy: IfNotPresent
           ports:
             - containerPort: 8080

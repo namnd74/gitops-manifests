@@ -35,12 +35,13 @@ class ConnectTest(unittest.TestCase):
             shutil.copytree(ROOT/name, self.repo/name)
         # Fixtures must not inherit whichever release the checkout currently uses.
         subprocess.run(['kustomize', 'edit', 'set', 'image',
-                        'ghcr.io/namnd74/be-service=ghcr.io/namnd74/be-service:sha-9912c6b'],
+                        'ghcr.io/example/be-service=ghcr.io/example/be-service:bootstrap'],
                        cwd=self.repo/'apps/be-service/base', check=True)
         self.bin = self.path/'bin'
         self.bin.mkdir()
         self.calls = self.path/'calls'
-        self.env = dict(os.environ, PATH=str(self.bin)+':'+os.environ['PATH'], CALLS=str(self.calls))
+        self.env = dict(os.environ, PATH=str(self.bin)+':'+os.environ['PATH'], CALLS=str(self.calls), SOURCE_REPO='example/be-service', IMAGE='ghcr.io/example/be-service',
+                        CONFIG_REPO_URL='https://github.com/example/gitops-manifests.git')
         self.snapshots = self.path/'snapshots'
         for env in ('dev', 'staging', 'prod'):
             shutil.copytree(self.repo, self.snapshots/env)
@@ -50,7 +51,7 @@ class ConnectTest(unittest.TestCase):
              'git': 'case "$1" in status|fetch) ;; rev-parse) echo "${2##*/}" ;; archive) branch="${2##*/}"; tar -C "$GIT_FIXTURES/$branch" -cf - apps scripts argocd ;; esac',
             'gh': 'exit 0',
             'kubeseal': 'exit 0',
-            'docker': '''echo '{"config":{"Labels":{"org.opencontainers.image.revision":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","org.opencontainers.image.version":"v1.2.3","org.opencontainers.image.source":"https://github.com/namnd74/be-service"}}}' ''',
+            'docker': '''echo '{"config":{"Labels":{"org.opencontainers.image.revision":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","org.opencontainers.image.version":"v1.2.3","org.opencontainers.image.source":"https://github.com/example/be-service"}}}' ''',
             'cosign': 'case "$*" in *"${FAIL_DIGEST:-never}"*) echo SIGNATURE_REJECTED >&2; exit 1 ;; esac',
             'kubectl': 'printf "%s\\n" "$*" >> "$CALLS"',
         }.items():
@@ -60,7 +61,7 @@ class ConnectTest(unittest.TestCase):
 
     def digest(self, env, character):
         subprocess.run(['kustomize', 'edit', 'set', 'image',
-                        'ghcr.io/namnd74/be-service=ghcr.io/namnd74/be-service@sha256:'+character*64],
+                        'ghcr.io/example/be-service=ghcr.io/example/be-service@sha256:'+character*64],
                        cwd=self.snapshots/env/'apps/be-service/base', check=True)
 
     def connect(self):

@@ -8,8 +8,8 @@ metadata:
 spec:
   project: default
   source:
-    repoURL: https://github.com/namnd74/gitops-manifests.git
-    targetRevision: prod
+    repoURL: git://gitops-source.gitops-system.svc.cluster.local/config.git
+    targetRevision: main
     path: apps/be-service/envs/prod
   destination:
     server: https://kubernetes.default.svc

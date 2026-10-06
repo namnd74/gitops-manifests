@@ -13,5 +13,5 @@ labels:
       app.kubernetes.io/name: be-service
 
 images:
-  - name: ghcr.io/namnd74/be-service
-    newTag: sha-9912c6b
+  - name: ghcr.io/example/be-service
+    newTag: bootstrap

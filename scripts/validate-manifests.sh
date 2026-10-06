@@ -2,7 +2,7 @@
 # Validate rendered configuration without a cluster or an application runtime.
 set -euo pipefail
 ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
-IMAGE=${IMAGE:-ghcr.io/namnd74/be-service}
+IMAGE=${IMAGE:-ghcr.io/example/be-service}
 for tool in kustomize yq jq; do command -v "$tool" >/dev/null || { echo "Missing tool: $tool" >&2; exit 1; }; done
 temporary=$(mktemp -d)
 trap 'rm -rf "$temporary"' EXIT
@@ -24,7 +24,7 @@ for environment in dev staging prod; do
     ($s.spec.template.metadata.namespace == $env) and
     ($d.spec.replicas == ({dev: 1, staging: 2, prod: 3}[$env])) and
     ($containers | length == 1) and ($c.name == "app") and
-    (($c.image == ($image + ":sha-9912c6b")) or
+    (($c.image == "ghcr.io/example/be-service:bootstrap") or
       (($c.image | startswith($image + "@")) and ($c.image | test("@sha256:[0-9a-f]{64}$")))) and
     ($envs | length == (unique_by(.name) | length)) and
     ($values.APP_ENV.value == $env) and

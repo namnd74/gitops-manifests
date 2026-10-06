@@ -24,14 +24,14 @@ class ManifestTest(unittest.TestCase):
 
     def validate(self):
         return subprocess.run(['bash', str(self.root/'scripts/validate-manifests.sh')],
-                              capture_output=True, text=True)
+                              capture_output=True, text=True, env=dict(os.environ, IMAGE="ghcr.io/example/be-service"))
 
     def test_all_overlays_inherit_branch_release_digest(self):
         self.edit('apps/be-service/base/kustomization.yaml',
                   'del(.images[0].newTag) | .images[0].digest = "sha256:'+'a'*64+'"')
         for env in ('dev', 'staging', 'prod'):
             rendered = subprocess.check_output(['kustomize', 'build', str(self.root/f'apps/be-service/envs/{env}')], text=True)
-            self.assertIn('ghcr.io/namnd74/be-service@sha256:'+'a'*64, rendered)
+            self.assertIn('ghcr.io/example/be-service@sha256:'+'a'*64, rendered)
 
     def test_accepts_bootstrap(self):
         result = self.validate()
