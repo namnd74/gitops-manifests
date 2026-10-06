@@ -16,9 +16,9 @@ jobs:
         run: bash scripts/validate-manifests.sh
       - name: Test lab and release behavior
         run: python3 -m unittest discover -s scripts/tests -v
-      - uses: sigstore/cosign-installer@6e04d228eb30da1757ee4e1dd75a0ec73a653e06 # v3.1.1
+      - uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
         if: github.event_name == 'pull_request' && contains(fromJSON('["dev","staging","prod"]'), github.base_ref)
-        with: {cosign-release: 'v2.6.1'}
+        with: {cosign-release: 'v3.1.3'}
       - name: Validate release branch PR
         if: github.event_name == 'pull_request' && contains(fromJSON('["dev","staging","prod"]'), github.base_ref)
         env:
