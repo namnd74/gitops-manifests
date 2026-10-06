@@ -48,6 +48,11 @@ Mặc định mỗi lần chờ tối đa 3600 giây, poll 10 giây; có thể �
 
 Lưu ý khi bị gián đoạn:
 
+- `Unfinished session` nghĩa là session trước chưa được ghi nhận hoàn tất. Dùng đúng ID trong thông báo
+  với `--resume`; không tạo vòng mới hoặc xóa state để vượt qua kiểm tra. Nếu case đã tới checkpoint 7,
+  resume chỉ chốt metadata, không chạy lại release. Checkpoint rỗng/hỏng sẽ bị từ chối; giữ log và
+  bằng chứng CI/PR để phục hồi sau khi xác minh deployment thực tế.
+
 - Script cố đưa `DEMO_FAIL_PROD_BUILD=false` khi thoát sau khi đã dùng biến fault.
   Nếu network không cho reset, script báo lệnh cần làm. Nếu prod fail run còn queued và đã nhận biến false,
   resume có thể phát hiện build đạt ngoài kỳ vọng và dừng; không coi đó là demo thành công.

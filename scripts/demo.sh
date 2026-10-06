@@ -15,7 +15,10 @@ Run happy deployment and/or the agreed failure+rollback case sequentially.
 State/logs: .local/demos/SESSION. Stops on any unexpected result; never force pushes.
 HELP
 }
-COUNT=1; RESUME=; PREFLIGHT=false; DISPATCH_RUN=; count_set=false; SCENARIOS=all; scenario_set=false
+# Parse the complete runner before executing it: a pull/edit during a long CI wait
+# must not make Bash read a different file tail when execution resumes.
+main() {
+COUNT=1; RESUME=; RESUME_HINT=; PREFLIGHT=false; DISPATCH_RUN=; count_set=false; SCENARIOS=all; scenario_set=false
 while (($#)); do
     case "$1" in
         --help|-h) usage; exit 0 ;;
@@ -52,6 +55,7 @@ if ! mkdir "$LOCK" 2>/dev/null; then
     fail "Another runner owns $LOCK. If it exited, inspect its pid/host then remove only this empty lock directory and pid file."
 fi
 printf '%s %s\n' "$$" "$(hostname)" > "$LOCK/owner"
+# shellcheck disable=SC2329 # Called indirectly by the EXIT trap.
 cleanup() {
     local code=$?
     trap - EXIT
@@ -60,12 +64,12 @@ cleanup() {
         gh variable set DEMO_FAIL_PROD_BUILD --repo "$SOURCE_REPO" --body false || echo '[ERROR] Reset DEMO_FAIL_PROD_BUILD=false manually; GitHub unavailable' >&2
     fi
     rm -f "$LOCK/owner"; rmdir "$LOCK"
-    if ((code != 0)) && [[ -n "${SESSION:-}" ]]; then
+    if ((code != 0)) && [[ -n "${RESUME_HINT:-}" ]]; then
         if [[ "${LOG_STARTED:-false}" == true ]]; then
             tail -n 25 "$SESSION_DIR/session.log" >&3
-            printf '[STOP] Resume: bash scripts/demo.sh --resume %s\n' "$SESSION" >&3
+            printf '[STOP] Resume: bash scripts/demo.sh --resume %s\n' "$RESUME_HINT" >&3
         else
-            echo "[STOP] Saved state. Resume: bash scripts/demo.sh --resume $SESSION" >&2
+            echo "[STOP] Saved state. Resume: bash scripts/demo.sh --resume $RESUME_HINT" >&2
         fi
     fi
     exit "$code"
@@ -101,18 +105,23 @@ SESSION=${RESUME:-$(date -u +%Y%m%dT%H%M%SZ)-$$}
 SESSION_DIR="$STATE_DIR/demos/$SESSION"
 if [[ -n "$RESUME" ]]; then
     [[ -f "$SESSION_DIR/session.json" && ! -L "$SESSION_DIR" ]] || fail 'Unknown session'
+    RESUME_HINT=$SESSION
     jq -e --argjson config "$LOCAL_CONFIG" '.config == $config' "$SESSION_DIR/session.json" >/dev/null || fail 'Resume configuration differs from the saved session'
     COUNT=$(jq -er .count "$SESSION_DIR/session.json")
     SCENARIOS=$(jq -r '.scenario // "failure"' "$SESSION_DIR/session.json")
     LEGACY=$(jq -r 'if .format == 2 then "false" else "true" end' "$SESSION_DIR/session.json")
 else
     for existing in "$STATE_DIR"/demos/*/session.json; do
-        [[ ! -f "$existing" ]] || jq -e '.complete == true' "$existing" >/dev/null || fail "Unfinished session: $(dirname "$existing"); resume it first"
+        if [[ -f "$existing" ]] && ! jq -e '.complete == true' "$existing" >/dev/null; then
+            RESUME_HINT=$(basename "$(dirname "$existing")")
+            fail "Unfinished session: $(dirname "$existing"); resume it first"
+        fi
     done
     preflight
     LEGACY=false
     mkdir "$SESSION_DIR"
     jq -n --argjson config "$LOCAL_CONFIG" --argjson count "$COUNT" --arg scenario "$SCENARIOS" '{format:2,config:$config,count:$count,scenario:$scenario,complete:false}' > "$SESSION_DIR/session.json"
+    RESUME_HINT=$SESSION
 fi
 [[ "$SCENARIOS" == happy || "$SCENARIOS" == failure || "$SCENARIOS" == all ]] || fail 'Invalid saved scenario'
 [[ -z "$DISPATCH_RUN" || "$SCENARIOS" != happy ]] || fail 'Happy case does not use a prod dispatch'
@@ -146,9 +155,14 @@ for ((ROUND=1; ROUND<=COUNT; ROUND++)); do
         [[ "$LEGACY" == true ]] || LABEL="$LABEL-$SCENARIO"
         export LABEL SCENARIO
         [[ -f "$CYCLE" ]] || jq -n --arg scenario "$SCENARIO" '{stage:0,scenario:$scenario}' > "$CYCLE"
+        jq -es 'length == 1 and (.[0] | type == "object") and
+          (.[0].stage | tostring | test("^[0-7]$"))' "$CYCLE" >/dev/null || fail "Invalid checkpoint: $CYCLE; preserve evidence and recover before resuming"
         cycle
     done
  done
 temporary=$(mktemp "$SESSION_DIR/.session.XXXXXX")
 jq '.complete = true' "$SESSION_DIR/session.json" > "$temporary"; mv "$temporary" "$SESSION_DIR/session.json"
 say "[PASS] Completed $COUNT round(s) of $SCENARIOS. Evidence: $SESSION_DIR"
+}
+# Keep the call and exit in one parsed command list; never reread a changed file tail.
+main "$@"; exit "$?"

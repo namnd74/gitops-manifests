@@ -111,7 +111,10 @@ def rendered(env):
 
 if command == 'gh':
     if args[:2] == ['auth', 'status']:
-        pass
+        if os.environ.get('DEMO_MUTATE_ENTRY') and not data.get('mutated_entry'):
+            entry = Path(os.environ['DEMO_MUTATE_ENTRY'])
+            entry.write_text(('# replaced while running\n'*4096)+entry.read_text())
+            data['mutated_entry'] = True
     elif args[0] == 'api':
         if args[1] == 'user':
             emit(dict(login='fixture', id=42))

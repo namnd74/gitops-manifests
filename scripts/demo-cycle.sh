@@ -4,7 +4,12 @@ get() { jq -r --arg key "$1" '.[$key] // empty' "$CYCLE"; }
 put() {
     local temporary
     temporary=$(mktemp "$CYCLE_DIR/.state.XXXXXX")
-    jq --arg key "$1" --arg value "$2" '.[$key] = $value' "$CYCLE" > "$temporary"
+    if ! jq -es --arg key "$1" --arg value "$2" '
+      if length == 1 and (.[0] | type == "object") then .[0] | .[$key] = $value
+      else error("Invalid checkpoint; refuse to replace it") end' "$CYCLE" > "$temporary"; then
+        rm -f "$temporary"
+        fail "Invalid checkpoint: $CYCLE"
+    fi
     mv "$temporary" "$CYCLE"
 }
 next_version() {

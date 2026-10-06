@@ -79,6 +79,15 @@ class DemoRunnerTests(unittest.TestCase):
         self.assertNotEqual(result.returncode, 0)
         self.assertIn('Wrong run', result.stderr)
 
+    def test_empty_checkpoint_cannot_be_replaced_by_a_successful_write(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            state = Path(tmp)/'state.json'; state.write_text('')
+            result = self.run_bash('set -Eeuo pipefail; source scripts/demo-cycle.sh; '
+                'fail() { echo "$*" >&2; exit 1; }; CYCLE_DIR="$TEST_DIR"; '
+                'CYCLE="$CYCLE_DIR/state.json"; put stage 7', TEST_DIR=tmp)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertEqual(state.read_text(), '')
+
     def test_version_handles_patch_and_rejects_bad_semver(self):
         for old, expected in [('v1.3.2', 'v1.3.3'), ('v1.3.999', 'v1.3.1000')]:
             result = self.run_bash('source scripts/demo-cycle.sh; next_version "$OLD"', OLD=old)
@@ -145,6 +154,26 @@ class DemoIntegrationTests(unittest.TestCase):
     def run_demo(self, *args, **env):
         return subprocess.run(['bash', 'scripts/demo.sh', *args], cwd=self.lab,
                               env=dict(self.env, **env), text=True, capture_output=True, timeout=90)
+
+    def test_unfinished_session_reports_the_existing_resume_id(self):
+        existing = self.lab/'.local/demos/existing-session'
+        existing.mkdir(parents=True)
+        (existing/'session.json').write_text('{"complete":false}')
+        result = self.run_demo('--scenario','failure','--count','1')
+        self.assertNotEqual(result.returncode, 0)
+        output = result.stdout+result.stderr
+        self.assertIn('Unfinished session', output)
+        self.assertIn('Resume: bash scripts/demo.sh --resume existing-session', output)
+        self.assertEqual(len(list((self.lab/'.local/demos').glob('*/session.json'))), 1)
+        self.assertEqual(json.loads((self.root/'api.json').read_text())['prs'], [])
+
+    def test_editing_entry_file_during_run_does_not_reexecute_it(self):
+        result = self.run_demo('--scenario','happy','--count','1',
+                               DEMO_MUTATE_ENTRY=str(self.lab/'scripts/demo.sh'))
+        self.assertEqual(result.returncode, 0, result.stdout+result.stderr)
+        session = next((self.lab/'.local/demos').glob('*/session.json')).parent
+        self.assertTrue(json.loads((session/'session.json').read_text())['complete'])
+        self.assertEqual(len(json.loads((self.root/'api.json').read_text())['prs']), 6)
 
     def test_happy_case_resumes_prod_and_releases_all_environments(self):
         result = self.run_demo('--scenario','happy','--count','1', DEMO_INTERRUPT='prod')
