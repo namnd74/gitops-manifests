@@ -1,19 +1,17 @@
 apiVersion: argoproj.io/v1alpha1
 kind: Application
 metadata:
-  name: be-service-staging
+  name: be-service-ENVIRONMENT
   namespace: argocd
-  finalizers:
-    - resources-finalizer.argocd.argoproj.io
 spec:
   project: default
   source:
-    repoURL: https://github.com/namnd74/gitops-manifests.git
-    targetRevision: staging
-    path: apps/be-service/envs/staging
+    repoURL: CONFIG_REPO_URL
+    targetRevision: dev
+    path: apps/be-service/envs/ENVIRONMENT
   destination:
     server: https://kubernetes.default.svc
-    namespace: staging
+    namespace: ENVIRONMENT
   syncPolicy:
     automated:
       prune: true
