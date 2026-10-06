@@ -127,6 +127,8 @@ if command == 'gh':
         emit([dict(name=k, value=v) for k, v in data['variables'].items()])
     elif args[:2] == ['variable', 'set']:
         data['variables'][args[2]] = option('--body')
+        if args[2] == 'DEMO_FAIL_PROD_BUILD':
+            data.setdefault('fault_values', []).append(option('--body'))
     elif args[:2] == ['pr', 'list']:
         rows = [p for p in data['prs'] if p['repo'] == name()]
         for flag, key in [('--base', 'baseRefName'), ('--head', 'headRefName')]:
@@ -211,6 +213,7 @@ elif command == 'check-fixture':
         branch, image, fault = rendered(env)
         assert not fault, 'check cannot pass during readiness fault'
         envs[env] = dict(branch=branch, image=image, revision=sha('manifests', branch), **data['images'][image])
+    data['baseline_prod'] = envs['prod']['image']
     state = Path(os.environ['STATE_DIR'])
     (state/'release.json').write_text(json.dumps(dict(environments=envs)))
 else:

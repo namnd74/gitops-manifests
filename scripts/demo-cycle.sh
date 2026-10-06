@@ -74,7 +74,12 @@ prod_dispatch() {
     local before rows run marker="$CYCLE_DIR/dispatch-intent.json" sha
     sha=$(get prod_sha)
     run=$(get prod_dispatch_run)
-    if [[ -n "$DISPATCH_RUN" && -z "$run" ]]; then put prod_dispatch_run "$DISPATCH_RUN"; run=$DISPATCH_RUN; fi
+    if [[ -n "$DISPATCH_RUN" ]]; then
+        [[ -f "$marker" ]] || fail '--dispatch-run requires an existing dispatch intent for this case'
+        [[ -z "$run" || "$run" == "$DISPATCH_RUN" ]] || fail 'Saved dispatch run differs from --dispatch-run'
+        put prod_dispatch_run "$DISPATCH_RUN"; run=$DISPATCH_RUN
+        DISPATCH_RUN= # Apply the attached run only to this interrupted case, not future rounds.
+    fi
     if [[ -z "$run" ]]; then
         if [[ ! -f "$marker" ]]; then
             before=$(gh run list --repo "$SOURCE_REPO" --workflow ci.yaml --branch prod --commit "$sha" --event workflow_dispatch --limit 100 --json databaseId)
@@ -131,7 +136,8 @@ wait_rollout_failure() {
 cycle() {
     local stage feature fault rollback number sha run stg_old prod_old
     stage=$(get stage); feature="feature/seminar-$LABEL"; fault="demo/prod-fault-$LABEL"; rollback="rollback/prod-$LABEL"
-    say "[ROUND] $ROUND/$COUNT — $LABEL (saved stage $stage)"
+    [[ $(get scenario) == "$SCENARIO" || -z $(get scenario) ]] || fail 'Saved case differs from the session'
+    say "[ROUND] $ROUND/$COUNT — $SCENARIO — $LABEL (saved stage $stage)"
     if ((stage == 0)); then
         if [[ ! -f "$CYCLE_DIR/baseline.json" ]]; then check_snapshot baseline; fi
         git_demo -C "$BACKEND_CLONE" fetch origin
@@ -172,7 +178,19 @@ cycle() {
         assert_snapshot stg-deployed "$(get dev_image)" "$(get stg_image)" "$prod_old"
         checkpoint 3; stage=3
     fi
-    if ((stage == 3)); then
+    if ((stage == 3)) && [[ "$SCENARIO" == happy ]]; then
+        say '[3] Happy case: stg -> prod -> image PR -> Argo prod Healthy'
+        export FAULT_TOUCHED=true
+        gh variable set DEMO_FAIL_PROD_BUILD --repo "$SOURCE_REPO" --body false
+        promote_source prod prod stg "$(get stg_sha)"
+        sha=$(get prod_sha); run=$(set -e; find_run prod_run prod "$sha" push); wait_run "$run" "$sha" push prod
+        release_pr prod "$sha" "$run"
+        merge_pr prod_manifest_merge "$CONFIG_REPO" "$(get prod_release_pr)" "$(get prod_release_head)"
+        check_snapshot prod-deployed
+        assert_snapshot prod-deployed "$(get dev_image)" "$(get stg_image)" "$(get prod_image)"
+        checkpoint 7; stage=7
+    fi
+    if ((stage == 3)) && [[ "$SCENARIO" == failure ]]; then
         say '[3] stg -> prod: expected Docker build failure'
         export FAULT_TOUCHED=true
         gh variable set DEMO_FAIL_PROD_BUILD --repo "$SOURCE_REPO" --body true
@@ -236,5 +254,9 @@ cycle() {
         gh variable set DEMO_FAIL_PROD_BUILD --repo "$SOURCE_REPO" --body false
         checkpoint 7
     fi
-    say "[PASS] Round $ROUND: dev/staging $(get version), prod baseline restored"
+    if [[ "$SCENARIO" == happy ]]; then
+        say "[PASS] Round $ROUND happy: dev/staging/prod $(get version), all Healthy"
+    else
+        say "[PASS] Round $ROUND failure: dev/staging $(get version), prod baseline restored"
+    fi
 }

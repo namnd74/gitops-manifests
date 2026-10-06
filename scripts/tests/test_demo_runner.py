@@ -33,7 +33,7 @@ class DemoRunnerTests(unittest.TestCase):
         self.assertIn('--resume', result.stdout)
 
     def test_invalid_count_and_path_rejected_before_external_actions(self):
-        for args in ('--count 0', '--count -1', '--count x', '--resume ../x', '--count 1 --resume x'):
+        for args in ('--count 0', '--count -1', '--count x', '--resume ../x', '--count 1 --resume x', '--scenario broken', '--scenario happy --resume x'):
             result = self.run_bash('bash scripts/demo.sh '+args)
             self.assertNotEqual(result.returncode, 0, args)
             self.assertNotIn('Missing tool', result.stderr)
@@ -146,8 +146,54 @@ class DemoIntegrationTests(unittest.TestCase):
         return subprocess.run(['bash', 'scripts/demo.sh', *args], cwd=self.lab,
                               env=dict(self.env, **env), text=True, capture_output=True, timeout=90)
 
-    def test_two_complete_cycles_and_completed_resume_do_not_duplicate_prs(self):
+    def test_happy_case_resumes_prod_and_releases_all_environments(self):
+        result = self.run_demo('--scenario','happy','--count','1', DEMO_INTERRUPT='prod')
+        self.assertNotEqual(result.returncode, 0)
+        session = next((self.lab/'.local/demos').glob('*/session.json')).parent
+        self.assertEqual(json.loads((session/'0001/state.json').read_text())['stage'], '3')
+        resumed = self.run_demo('--resume', session.name)
+        self.assertEqual(resumed.returncode, 0, resumed.stdout+resumed.stderr)
+        verified = json.loads((session/'0001/prod-deployed.json').read_text())['environments']
+        self.assertEqual({v['version'] for v in verified.values()}, {'v1.3.2'})
+        state = json.loads((session/'0001/state.json').read_text())
+        self.assertEqual(state['stage'], '7')
+        self.assertNotIn('bad_merge', state)
+        self.assertNotIn('prod_failed_run', state)
+        data = json.loads((self.root/'api.json').read_text())
+        self.assertEqual(len(data['prs']), 6)
+        self.assertEqual(len(data['runs']), 3)
+        self.assertTrue(all(r['conclusion'] == 'success' for r in data['runs']))
+        self.assertNotIn('true', data.get('fault_values', []))
+
+    def test_default_repeats_happy_then_failure_with_new_prod_baselines(self):
         result = self.run_demo('--count','2')
+        self.assertEqual(result.returncode, 0, result.stdout+result.stderr)
+        session = next((self.lab/'.local/demos').glob('*/session.json')).parent
+        self.assertEqual(json.loads((session/'session.json').read_text())['scenario'], 'all')
+        previous = None
+        for i, good_version, candidate in [(1,'v1.3.2','v1.3.3'), (2,'v1.3.4','v1.3.5')]:
+            slot = f'{i:04d}'
+            happy = json.loads((session/f'{slot}-happy/prod-deployed.json').read_text())['environments']
+            baseline = json.loads((session/f'{slot}-failure/baseline.json').read_text())['environments']
+            rollback = json.loads((session/f'{slot}-failure/rollback-verified.json').read_text())['environments']
+            self.assertEqual(baseline['prod'], happy['prod'])
+            self.assertEqual(rollback['prod']['image'], happy['prod']['image'])
+            self.assertEqual(rollback['prod']['version'], good_version)
+            self.assertEqual(rollback['dev']['version'], candidate)
+            self.assertEqual(rollback['staging']['version'], candidate)
+            if previous:
+                before = json.loads((session/f'{slot}-happy/baseline.json').read_text())['environments']
+                self.assertEqual(before, previous)
+            previous = rollback
+        data = json.loads((self.root/'api.json').read_text())
+        self.assertEqual(len(data['prs']), 28)
+        self.assertEqual(len(data['runs']), 14)
+        resumed = self.run_demo('--resume', session.name)
+        self.assertEqual(resumed.returncode, 0, resumed.stdout+resumed.stderr)
+        self.assertEqual(json.loads((self.root/'api.json').read_text())['prs'], data['prs'])
+
+    def test_two_complete_cycles_and_completed_resume_do_not_duplicate_prs(self):
+        result = self.run_demo('--scenario','failure','--count','2')
         self.assertEqual(result.returncode, 0, result.stdout+result.stderr)
         sessions = list((self.lab/'.local/demos').glob('*/session.json'))
         self.assertEqual(len(sessions), 1)
@@ -172,7 +218,7 @@ class DemoIntegrationTests(unittest.TestCase):
         self.assertEqual(json.loads((self.root/'api.json').read_text())['prs'], data['prs'])
 
     def test_dispatch_response_loss_resumes_without_duplicate_build(self):
-        result = self.run_demo('--count','1', DEMO_INTERRUPT='dispatch')
+        result = self.run_demo('--scenario','failure','--count','1', DEMO_INTERRUPT='dispatch')
         self.assertNotEqual(result.returncode, 0)
         session = next((self.lab/'.local/demos').glob('*/session.json')).parent
         self.assertEqual(json.loads((session/'0001/state.json').read_text())['stage'], '4')
@@ -183,7 +229,7 @@ class DemoIntegrationTests(unittest.TestCase):
         self.assertEqual(len(data['prs']), 8)
 
     def test_rollout_interruption_resumes_then_reverts_exact_merge(self):
-        result = self.run_demo('--count','1', DEMO_INTERRUPT='rollout')
+        result = self.run_demo('--scenario','failure','--count','1', DEMO_INTERRUPT='rollout')
         self.assertNotEqual(result.returncode, 0)
         session = next((self.lab/'.local/demos').glob('*/session.json')).parent
         self.assertEqual(json.loads((session/'0001/state.json').read_text())['stage'], '5')
@@ -194,7 +240,7 @@ class DemoIntegrationTests(unittest.TestCase):
         self.assertEqual(data['variables']['DEMO_FAIL_PROD_BUILD'], 'false')
 
     def test_interruption_at_staging_resumes_existing_pr(self):
-        result = self.run_demo('--count','1', DEMO_INTERRUPT='stg')
+        result = self.run_demo('--scenario','failure','--count','1', DEMO_INTERRUPT='stg')
         self.assertNotEqual(result.returncode, 0)
         session = next((self.lab/'.local/demos').glob('*/session.json')).parent
         state = json.loads((session/'0001/state.json').read_text())

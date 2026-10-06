@@ -2,10 +2,12 @@
 set -Eeuo pipefail
 usage() {
     cat <<'HELP'
-Usage: bash scripts/demo.sh [--count N | --resume SESSION] [--preflight]
+Usage: bash scripts/demo.sh [--scenario happy|failure|all] [--count N] [--preflight]
+       bash scripts/demo.sh --resume SESSION
        bash scripts/demo.sh --resume SESSION --dispatch-run RUN_ID
-Run the agreed GitHub/Argo release+failure+rollback scenario sequentially.
---count N          Number of cycles (1..1000), default 1. Real builds and PR merges.
+Run happy deployment and/or the agreed failure+rollback case sequentially.
+--scenario MODE    happy: all environments succeed; failure: faults+rollback; all: both (default).
+--count N          Repeat the chosen scenario(s) N times (1..1000), default 1.
 --resume SESSION   Continue an interrupted session using its saved checkpoints.
 --dispatch-run ID  Attach the verified existing prod dispatch after an ambiguous POST.
 --preflight        Check credentials, repo state and deployed baseline only; no releases.
@@ -13,21 +15,22 @@ Run the agreed GitHub/Argo release+failure+rollback scenario sequentially.
 State/logs: .local/demos/SESSION. Stops on any unexpected result; never force pushes.
 HELP
 }
-COUNT=1; RESUME=; PREFLIGHT=false; DISPATCH_RUN=; count_set=false
+COUNT=1; RESUME=; PREFLIGHT=false; DISPATCH_RUN=; count_set=false; SCENARIOS=all; scenario_set=false
 while (($#)); do
     case "$1" in
         --help|-h) usage; exit 0 ;;
-        --count|--resume|--dispatch-run)
+        --count|--resume|--dispatch-run|--scenario)
             (($# >= 2)) || { echo "Missing value for $1" >&2; exit 2; }
-            case "$1" in --count) COUNT=$2; count_set=true ;; --resume) RESUME=$2 ;; --dispatch-run) DISPATCH_RUN=$2 ;; esac
+            case "$1" in --count) COUNT=$2; count_set=true ;; --resume) RESUME=$2 ;; --dispatch-run) DISPATCH_RUN=$2 ;; --scenario) SCENARIOS=$2; scenario_set=true ;; esac
             shift 2 ;;
         --preflight) PREFLIGHT=true; shift ;;
         *) echo "Unknown option: $1" >&2; exit 2 ;;
     esac
 done
+[[ "$SCENARIOS" == happy || "$SCENARIOS" == failure || "$SCENARIOS" == all ]] || { echo 'Scenario must be happy, failure or all' >&2; exit 2; }
 [[ "$COUNT" =~ ^[1-9][0-9]{0,3}$ && "$COUNT" -le 1000 ]] || { echo 'Count must be 1..1000' >&2; exit 2; }
 [[ -z "$RESUME" || "$RESUME" =~ ^[a-zA-Z0-9-]+$ ]] || { echo 'Invalid session ID' >&2; exit 2; }
-[[ -z "$RESUME" || "$count_set" == false ]] || { echo 'Resume uses the saved count' >&2; exit 2; }
+[[ -z "$RESUME" || ( "$count_set" == false && "$scenario_set" == false ) ]] || { echo 'Resume uses the saved count and scenario' >&2; exit 2; }
 [[ -z "$DISPATCH_RUN" || ( -n "$RESUME" && "$DISPATCH_RUN" =~ ^[1-9][0-9]*$ ) ]] || { echo '--dispatch-run requires --resume and a numeric run ID' >&2; exit 2; }
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=local-common.sh
@@ -37,7 +40,7 @@ source "$SCRIPT_DIR/demo-github.sh"
 # shellcheck source=demo-cycle.sh
 source "$SCRIPT_DIR/demo-cycle.sh"
 init_local
-require_tools gh kubectl curl kustomize yq docker go
+require_tools gh kubectl curl kustomize yq docker go gofmt
 POLL_SECONDS=${DEMO_POLL_SECONDS:-10}; WAIT_SECONDS=${DEMO_WAIT_SECONDS:-3600}
 [[ "$POLL_SECONDS" =~ ^[1-9][0-9]*$ && "$WAIT_SECONDS" =~ ^[1-9][0-9]*$ ]] || fail 'Demo wait/poll seconds must be positive integers'
 IMAGE="ghcr.io/$(printf '%s' "$SOURCE_REPO" | tr '[:upper:]' '[:lower:]')"
@@ -100,14 +103,19 @@ if [[ -n "$RESUME" ]]; then
     [[ -f "$SESSION_DIR/session.json" && ! -L "$SESSION_DIR" ]] || fail 'Unknown session'
     jq -e --argjson config "$LOCAL_CONFIG" '.config == $config' "$SESSION_DIR/session.json" >/dev/null || fail 'Resume configuration differs from the saved session'
     COUNT=$(jq -er .count "$SESSION_DIR/session.json")
+    SCENARIOS=$(jq -r '.scenario // "failure"' "$SESSION_DIR/session.json")
+    LEGACY=$(jq -r 'if .format == 2 then "false" else "true" end' "$SESSION_DIR/session.json")
 else
     for existing in "$STATE_DIR"/demos/*/session.json; do
         [[ ! -f "$existing" ]] || jq -e '.complete == true' "$existing" >/dev/null || fail "Unfinished session: $(dirname "$existing"); resume it first"
     done
     preflight
+    LEGACY=false
     mkdir "$SESSION_DIR"
-    jq -n --argjson config "$LOCAL_CONFIG" --argjson count "$COUNT" '{config:$config,count:$count,complete:false}' > "$SESSION_DIR/session.json"
+    jq -n --argjson config "$LOCAL_CONFIG" --argjson count "$COUNT" --arg scenario "$SCENARIOS" '{format:2,config:$config,count:$count,scenario:$scenario,complete:false}' > "$SESSION_DIR/session.json"
 fi
+[[ "$SCENARIOS" == happy || "$SCENARIOS" == failure || "$SCENARIOS" == all ]] || fail 'Invalid saved scenario'
+[[ -z "$DISPATCH_RUN" || "$SCENARIOS" != happy ]] || fail 'Happy case does not use a prod dispatch'
 # Clones isolate generated commits from the user's main checkout.
 export BACKEND_CLONE="$SESSION_DIR/backend" MANIFEST_CLONE="$SESSION_DIR/manifests"
 for repo in backend manifests; do
@@ -127,13 +135,20 @@ exec 3>&1
 exec >> "$SESSION_DIR/session.log" 2>&1
 LOG_STARTED=true
 say() { printf '%s\n' "$*"; printf '%s\n' "$*" >&3; }
-say "[SESSION] $SESSION — $COUNT cycle(s). State: $SESSION_DIR"
+say "[SESSION] $SESSION — $SCENARIOS, $COUNT round(s). State: $SESSION_DIR"
+CASES=("$SCENARIOS"); [[ "$SCENARIOS" != all ]] || CASES=(happy failure)
 for ((ROUND=1; ROUND<=COUNT; ROUND++)); do
-    CYCLE_DIR="$SESSION_DIR/$(printf '%04d' "$ROUND")"; mkdir -p "$CYCLE_DIR"
-    CYCLE="$CYCLE_DIR/state.json"; LABEL="$SESSION-$(printf '%04d' "$ROUND")"; export LABEL
-    [[ -f "$CYCLE" ]] || printf '{"stage":0}\n' > "$CYCLE"
-    cycle
+    for SCENARIO in "${CASES[@]}"; do
+        slot=$(printf '%04d' "$ROUND")
+        [[ "$SCENARIOS" != all ]] || slot="$slot-$SCENARIO"
+        CYCLE_DIR="$SESSION_DIR/$slot"; mkdir -p "$CYCLE_DIR"
+        CYCLE="$CYCLE_DIR/state.json"; LABEL="$SESSION-$(printf '%04d' "$ROUND")"
+        [[ "$LEGACY" == true ]] || LABEL="$LABEL-$SCENARIO"
+        export LABEL SCENARIO
+        [[ -f "$CYCLE" ]] || jq -n --arg scenario "$SCENARIO" '{stage:0,scenario:$scenario}' > "$CYCLE"
+        cycle
+    done
  done
 temporary=$(mktemp "$SESSION_DIR/.session.XXXXXX")
 jq '.complete = true' "$SESSION_DIR/session.json" > "$temporary"; mv "$temporary" "$SESSION_DIR/session.json"
-say "[PASS] Completed $COUNT cycle(s). Evidence: $SESSION_DIR"
+say "[PASS] Completed $COUNT round(s) of $SCENARIOS. Evidence: $SESSION_DIR"

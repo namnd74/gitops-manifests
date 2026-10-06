@@ -1,26 +1,38 @@
-# Kịch bản seminar: ba môi trường, chặn build lỗi và rollback GitOps
+# Kịch bản seminar: happy case và failure/rollback case
 
 ## Chạy tự động và tiếp tục khi bị ngắt
 
-Để script làm đúng các bước bên dưới, chạy ở repo manifest:
+Chạy ở repo manifest, chọn happy case, failure case hoặc cả hai:
 
 ```bash
 bash scripts/demo.sh --preflight
-bash scripts/demo.sh --count 1
+bash scripts/demo.sh --scenario all --count 1
 ```
 
-Thay `1` bằng `10`, `100` hoặc `1000` để lặp tuần tự. Không cần dựng lại cluster;
+| Case | Lệnh | Diễn biến / điểm kết thúc |
+| --- | --- | --- |
+| Happy | `bash scripts/demo.sh --scenario happy --count 1` | Feature → dev → stg → prod; build/deploy đều đạt, cả ba Healthy |
+| Failure | `bash scripts/demo.sh --scenario failure --count 1` | Dev/stg đạt, prod build lỗi rồi rollout lỗi, PR revert phục hồi baseline prod |
+| Cả hai | `bash scripts/demo.sh --scenario all --count 1` | Happy trước; bản prod tốt vừa phát hành trở thành baseline cho failure |
+
+Mặc định `--scenario all`. Thay `1` bằng `10`, `100` hoặc `1000` để lặp tuần tự;
+`all --count 10` là 10 cặp happy → failure. Không cần dựng lại cluster;
 mỗi vòng ghi baseline mới, tự tăng patch version từ backend dev và dùng nhánh duy nhất.
 Các môi trường ban đầu **có thể khác version**: sau diễn tập, dev/staging có thể ở B còn prod ở A.
 Script lấy digest/version hiện tại của từng môi trường, không dùng lại các file baseline của lần cũ.
 
-Thứ tự tự động: feature PR → dev CI/image PR/deploy → dev-to-stg PR/CI/image PR/deploy →
+Happy case: feature PR → dev CI/image PR/deploy → dev-to-stg PR/CI/image PR/deploy →
+stg-to-prod PR/CI/image PR/deploy; kiểm chứng tất cả Healthy và đúng image mới.
+Không bật build fault, không đổi readiness và không tạo rollback PR trong happy case.
+
+Failure case: feature PR → dev CI/image PR/deploy → dev-to-stg PR/CI/image PR/deploy →
 stg-to-prod PR/build lỗi → xác nhận prod không đổi → dispatch prod build đạt → PR readiness fault →
 xác nhận Argo Degraded và ba pod cũ còn phục vụ → PR revert toàn bộ fault merge → xác nhận rollback.
 Không bỏ qua checks hoặc signature/provenance gate trong CI manifest.
 
 Mỗi session lưu `.local/demos/SESSION/session.json`, `session.log`, hai clone riêng và thư mục
-`0001`, `0002`, … chứa state/PR/run/artifact/baseline/deployment/rollback evidence.
+`0001`, `0002`, … khi chọn một case; `0001-happy`, `0001-failure`, … khi chọn `all`.
+Mỗi thư mục chứa state/PR/run/artifact/baseline/deployment/rollback evidence riêng.
 State được ghi trước network write và checkpoint chỉ tiến sau khi kiểm chứng bước hoàn tất.
 
 ```bash
@@ -29,7 +41,7 @@ bash scripts/demo.sh --resume SESSION
 
 Theo dõi chi tiết ở một Terminal khác bằng `tail -f .local/demos/SESSION/session.log`.
 
-Resume đọc số vòng đã lưu, tái sử dụng PR/commit/run; vòng đã hoàn thành không phát hành lại.
+Resume đọc số vòng **và case** đã lưu, tái sử dụng PR/commit/run; vòng đã hoàn thành không phát hành lại.
 Không sửa checkpoint để bỏ qua bước. Khi script dừng, đọc log và khắc phục nguyên nhân rồi resume.
 Mặc định mỗi lần chờ tối đa 3600 giây, poll 10 giây; có thể đặt `DEMO_WAIT_SECONDS`,
 `DEMO_POLL_SECONDS` là số nguyên dương khi chạy.
@@ -45,17 +57,29 @@ Lưu ý khi bị gián đoạn:
   Nếu có nhiều dispatch ứng viên, kiểm tra SHA/event trên Actions rồi gắn run đúng:
   `bash scripts/demo.sh --resume SESSION --dispatch-run RUN_ID`.
   Nếu **không có run nào** sau khi xác nhận GitHub không nhận POST, xóa riêng
-  `000N/dispatch-intent.json` của vòng bị ngắt rồi resume. Không xóa marker khi run còn queued.
+  `000N/dispatch-intent.json` (hoặc `000N-failure/dispatch-intent.json` với `all`) của vòng bị ngắt rồi resume. Không xóa marker khi run còn queued.
 - Build/scan/sign/attest đạt nhưng tạo PR lỗi: runner chỉ phục hồi từ artifact và release branch CI đã push,
   kiểm tra đúng digest/source/version và vẫn chờ manifest CI. Run lỗi được giữ trong evidence.
 - Dành riêng cả hai repo và cluster cho demo trong session; local lock không khóa người dùng máy khác.
   Thay đổi ngoài runner hoặc branch protection mới có thể làm script dừng để bạn xử lý.
 - Các clone runtime/checkpoints cần giữ để resume. Không xóa `.local/demos` giữa session.
 
-Mỗi vòng dùng bốn CI build backend (dev, stg, prod cố ý fail, prod dispatch), cùng CI cho PRs.
+Happy case dùng ba CI build backend (dev, stg, prod); failure case dùng bốn (dev, stg,
+prod cố ý fail, prod dispatch). Một vòng `all` dùng bảy build backend, cùng CI cho PRs.
 Số vòng lớn tiêu thụ quota và dung lượng artifact; không tự động xóa Git history/package/evidence.
 Các test dùng Git thật trên repo tạm và API/cluster giả lập; không thay thế một lần chạy end-to-end
 trên GitHub/Argo của bên triển khai. Hãy chạy `--count 1` trước khi chọn số vòng lớn.
+
+## Cách trình bày hai case
+
+1. **Happy case:** “Chúng ta đưa bản B qua dev, staging rồi production. Mỗi lần merge source có build riêng;
+   merge PR manifest khiến Argo triển khai đúng môi trường. Cuối case cả ba chạy B và Healthy.”
+2. **Failure case:** “B là bản tốt đang phục vụ production. Chúng ta đưa bản C qua dev/staging, chứng minh
+   CI chặn prod build lỗi; sau khi build đạt, rollout có readiness lỗi. Revert manifest đưa production về B.”
+
+A/B/C chỉ là vai trò của các bản, không phải version cố định. Trình diễn lần lượt Actions → PR manifest →
+Argo → trang ứng dụng ở từng bước. Runner tự động dành cho chạy lặp; `session.log` và các snapshot
+cho phép đối chiếu kết quả. Các bước thao tác tay bên dưới mô tả **failure case**.
 
 ## Flow và điều kiện bắt đầu
 
@@ -63,7 +87,7 @@ Backend: `feature → dev → stg → prod`. Mỗi nhánh tự build image riên
 Manifest: PR digest vào nhánh tương ứng; merge thì Argo tự triển khai môi trường đó.
 `stg` ánh xạ namespace/overlay `staging`.
 
-Hai tình huống độc lập:
+Failure case có hai tình huống lỗi nối tiếp:
 
 1. **Build prod fail:** không publish/không đổi manifest; production giữ bản cũ. Không cần rollback deployment.
 2. **Build prod pass, rollout fail:** PR đưa image mới cùng readiness probe lỗi lên prod;

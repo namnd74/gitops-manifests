@@ -64,17 +64,27 @@ Sau khi bootstrap và ba môi trường Healthy, chạy tại repo manifest:
 
 ```bash
 bash scripts/demo.sh --preflight
-bash scripts/demo.sh --count 1
-# Những lựa chọn khác cho một session mới:
-bash scripts/demo.sh --count 10
-bash scripts/demo.sh --count 100
-bash scripts/demo.sh --count 1000
+bash scripts/demo.sh --scenario happy --count 1
 ```
 
-Chọn **một** lệnh count; script thực sự push source, tạo/merge PR và dùng GitHub Actions.
-Mỗi vòng tự tăng patch VERSION, dùng tên feature/fault/rollback riêng, ghi baseline của từng môi trường,
-release dev rồi staging, kiểm chứng prod build fail, publish prod, gây lỗi readiness và rollback bằng PR revert.
-Kết thúc vòng: dev/staging chạy version mới; prod trở về digest/cấu hình lúc bắt đầu vòng.
+Chọn case theo mục đích demo (mỗi lệnh tạo session riêng):
+
+```bash
+bash scripts/demo.sh --scenario failure --count 1  # Build lỗi, rollout lỗi, rollback
+bash scripts/demo.sh --scenario all --count 1      # Happy trước, failure sau (mặc định)
+```
+
+Đổi count thành `10`, `100` hoặc `1000` để lặp case đã chọn. Với `all`, một vòng gồm **hai case**;
+`--scenario all --count 10` chạy 10 cặp happy → failure. Script thực sự push source, tạo/merge PR
+và dùng GitHub Actions; không chạy các lệnh ví dụ đồng thời.
+
+| Case | Luồng | Kết quả |
+| --- | --- | --- |
+| `happy` | Feature → dev → stg → prod; tất cả build và deploy đạt | Cả ba môi trường chạy bản mới, Healthy |
+| `failure` | Dev/stg đạt → prod build lỗi → retry đạt → rollout lỗi → PR revert | Dev/stg chạy bản mới; prod trở về baseline của case |
+| `all` | Happy case hoàn tất → ghi baseline mới → failure case | Prod rollback về bản tốt vừa phát hành trong happy case |
+
+Mỗi case tự tăng patch VERSION, dùng tên nhánh riêng và ghi baseline của từng môi trường.
 Không cần xóa cluster, reset lịch sử hay chỉnh version thủ công giữa các lần chạy.
 
 Script in SESSION và lưu checkpoint/log/evidence trong `.local/demos/SESSION/` (gitignored).
