@@ -75,6 +75,8 @@ Số vòng lớn tiêu thụ quota và dung lượng artifact; không tự độ
 Các test dùng Git thật trên repo tạm và API/cluster giả lập; không thay thế một lần chạy end-to-end
 trên GitHub/Argo của bên triển khai. Hãy chạy `--count 1` trước khi chọn số vòng lớn.
 
+Happy case thao tác tay từng PR: [demo-happy.md](demo-happy.md).
+
 ## Cách trình bày hai case
 
 1. **Happy case:** “Chúng ta đưa bản B qua dev, staging rồi production. Mỗi lần merge source có build riêng;

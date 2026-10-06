@@ -56,7 +56,8 @@ scripts/tests/             Test hành vi bootstrap, manifests và release gates
 ```
 
 Runtime dùng Bash và CLI. Python chỉ dùng để chạy tests, không dùng dựng cluster.
-Hướng dẫn trình diễn đầy đủ: [docs/demo.md](docs/demo.md).
+Hướng dẫn chọn case/chạy lặp: [docs/demo.md](docs/demo.md).
+Happy case chạy tay, tự sửa code và merge từng PR: [docs/demo-happy.md](docs/demo-happy.md).
 
 ## Chạy demo tự động nhiều lần
 
