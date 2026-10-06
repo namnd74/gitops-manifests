@@ -1,102 +1,139 @@
-# GitOps local
+# GitOps: GitHub Actions → GHCR → Argo CD
 
-Dựng backend, Kubernetes k3d, Argo CD và Sealed Secrets từ source trên `main`.
-Ba overlay `dev`, `staging`, `prod` dùng chung image, với replica 1/2/3.
-Flow local không cần đăng nhập GitHub, GHCR hoặc PAT.
+Demo ba môi trường `dev`, `staging`, `prod` trên Kubernetes local.
+Hai repo dùng `main`; ba overlay dùng chung image digest, replica tương ứng 1/2/3.
+
+```mermaid
+flowchart LR
+    B[Merge PR backend vào main] --> C[Actions: test, build, scan]
+    C --> I[GHCR: image, signature, provenance]
+    I --> P[Actions tạo PR image vào repo manifest]
+    P --> M[Review và merge PR manifest vào main]
+    M --> A[Argo CD auto-sync từ GitHub]
+    A --> D[dev: 1 replica]
+    A --> S[staging: 2 replicas]
+    A --> R[prod: 3 replicas]
+```
+
+Merge backend tự khởi động CI. Merge PR manifest tự khởi động triển khai qua
+Argo CD; không chạy Docker build/import hoặc render thủ công cho từng release.
+Ba môi trường nhận cùng release; flow này không promote lần lượt từng môi trường.
 
 ## Yêu cầu
 
-- Docker đang chạy, có BuildKit/buildx hỗ trợ `--provenance=false`.
-- Bash, Python 3, Git, k3d, kubectl, kubeseal, Kustomize, Mike Farah yq v4.
-- Internet để tải image, controller và package trong lần dựng đầu.
-- Backend hỗ trợ kiến trúc Docker host `amd64` hoặc `arm64`.
+- Docker Desktop đang chạy; Bash, Git, k3d, kubectl, kubeseal, Kustomize,
+  Mike Farah yq v4, jq, curl, GitHub CLI `gh`.
+- Internet để tải controller/image và truy cập GitHub/GHCR.
+- Go để kiểm tra backend trước PR. Python 3 chỉ dùng cho bộ test script/CI.
+- Docker host hỗ trợ `arm64` hoặc `amd64`; CI cần build đúng kiến trúc cluster.
+- Windows chạy trong WSL2. Phiên bản controller/tool được pin trong
+  `scripts/tool-versions.env`.
 
-Các phiên bản hạ tầng được pin trong `scripts/tool-versions.env` và
-`scripts/local-git/Dockerfile`. Windows chạy các lệnh trong WSL2.
+## Checkout và cấu hình riêng
 
-## Cấu trúc checkout
-
-Clone hai repo với tên thư mục như sau; thay URL bằng repository cần sử dụng:
+Clone hai repo cạnh nhau, thay URL bằng repo của bạn:
 
 ```bash
 git clone <backend-repository-url> be-service
 git clone <manifests-repository-url> gitops-manifests
-cd be-service && git switch main
-cd ../gitops-manifests && git switch main
-```
-
-```text
-workspace/
-├── be-service/
-└── gitops-manifests/
-    ├── apps/                 # Cấu hình chung và overlay môi trường
-    ├── scripts/              # Launcher, hạ tầng và kiểm tra
-    ├── .env.local.example    # Mẫu cấu hình dùng chung
-    ├── .env.local            # Giá trị riêng, không commit
-    └── .local/               # Dữ liệu sinh ra, không commit
-```
-
-## Cấu hình riêng
-
-```bash
+cd gitops-manifests
 cp .env.local.example .env.local
 ```
 
-Chỉnh `.env.local` khi đường dẫn, tên cluster hoặc port khác mặc định.
-File chỉ chứa các cặp `KEY=value`, không chứa lệnh shell.
-Biến môi trường của tiến trình được ưu tiên hơn file env.
+Chỉ copy env nếu chưa có file riêng. Không ghi tài khoản/token/đường dẫn máy
+vào source hoặc commit `.env.local`, `.local/`.
 
-| Biến | Mặc định | Chức năng |
+| Biến env | Mặc định | Ý nghĩa |
 | --- | --- | --- |
-| `BE_SOURCE_DIR` | `../be-service` | Thư mục source backend |
-| `CLUSTER_NAME` | `gitops-local` | Tên cluster riêng |
-| `HTTP_PORT` | `8088` | Port HTTP trên loopback |
-| `HTTPS_PORT` | `8443` | Port HTTPS trên loopback |
-| `STATE_DIR` | `.local` | Dữ liệu runtime, chỉ nằm trong `.local/` |
+| `BE_SOURCE_DIR` | `../be-service` | Checkout backend, phục vụ demo và suy ra Git remote |
+| `CLUSTER_NAME` | `gitops-local` | Cluster k3d |
+| `HTTP_PORT` | `8088` | Port HTTP loopback |
+| `HTTPS_PORT` | `8443` | Port HTTPS loopback |
+| `STATE_DIR` | `.local` | Dữ liệu bootstrap, chỉ trong `.local/` |
+| `CONFIG_REPO_URL` | Git remote `origin` của repo này | URL GitHub repo manifest |
+| `SOURCE_REPO` | Git remote backend, hoặc cùng owner với tên `be-service` | Backend dạng `OWNER/REPO` |
 
-Đường dẫn tương đối được tính từ repo manifest. Hai port phải khác nhau và
-chưa bị dùng. Launcher từ chối cluster trùng tên nhưng không có metadata
-hoặc có cấu hình khác. Khi đổi port/mount của cluster đã dựng, chạy `down`
-bằng cấu hình cũ trước khi sửa env.
+File env chỉ chứa `KEY=value`, không thực thi shell. Biến môi trường tiến trình
+được ưu tiên. `CONFIG_REPO_URL` không được chứa token. Repository/registry và
+credential của mỗi bên được cấu hình qua env cùng GitHub Variables/Secrets.
 
-## Dựng và vận hành
+## Cấu hình GitHub và GHCR
+
+Đăng nhập GitHub CLI bằng `gh auth login`. Tạo `CONFIG_REPO_PAT` trong **cả hai
+repo** qua GitHub Settings → Secrets and variables → Actions, hoặc `gh secret set`.
+Không đưa token vào chat/source. Credential cần quyền đọc/ghi repo manifest,
+tạo PR; phần verify image cần quyền đọc package/provenance tương ứng.
+
+`build.sh` thiết lập các variable sau và yêu cầu CI trên backend `main`:
+
+| Repo | Variable/secret | Chức năng |
+| --- | --- | --- |
+| Backend | `ENABLE_GITOPS_RELEASE=true` | Bật publish và PR manifest |
+| Backend | `CONFIG_REPO` | Repo nhận PR image |
+| Backend | `IMAGE_ARCH` | `arm64` hoặc `amd64` theo Docker host |
+| Backend | secret `CONFIG_REPO_PAT` | Checkout/push/create PR manifest |
+| Manifest | `SOURCE_REPO` | Backend được phép cung cấp image |
+| Manifest | `IMAGE` | Image GHCR được phép |
+| Manifest | secret `CONFIG_REPO_PAT` | Đọc package/provenance khi verify |
+
+Workflow phải có trong `main` của hai repo. CI chạy quality/build/Trivy trước
+khi publish, ký Cosign và attest provenance. PR image dùng digest bất biến;
+CI manifest kiểm tra cấu hình, chữ ký và provenance trước khi merge.
+
+Repo manifest và GHCR cần truy cập được từ cluster. Với repo/package công khai,
+không cần credential pull. Với repo riêng, cấu hình repository credential trong
+Argo CD; với package riêng, cấu hình `imagePullSecrets` cho workload. GitHub PAT
+trong Actions không tự cấp quyền cho Argo hoặc Kubernetes.
+
+## Dựng lần đầu
+
+Các script dùng Bash; file YAML trong `scripts/templates/` chứa mẫu Argo
+Application. Argo theo dõi **GitHub**, không dùng Git server nội bộ.
+
+| Script | Vai trò |
+| --- | --- |
+| `setup.sh` | Tạo k3d và cài Ingress, Argo CD, Sealed Secrets |
+| `render.sh` | Tạo sealed secret riêng cho cluster và ba Argo Applications |
+| `deploy.sh` | Apply sealed secret và Applications; Argo tự quản lý backend |
+| `build.sh` | Cấu hình CI và yêu cầu build trên GitHub, dùng để bootstrap/thử lại |
+| `check.sh` | Đối chiếu GitHub main, digest/image runtime, replica và HTTP version/commit |
+| `local-common.sh` | Hàm chung đọc env, gọi CLI và metadata |
+| `local-dev.sh` | Lệnh tắt cho bootstrap, status, down |
+
+Từ thư mục `gitops-manifests`, chạy:
 
 ```bash
-bash scripts/local-dev.sh up
+bash scripts/setup.sh
+bash scripts/render.sh
+bash scripts/deploy.sh
+bash scripts/build.sh
+```
+
+Lệnh `build.sh` yêu cầu CI, không chờ CI hoặc tự merge PR. Theo dõi Actions ở
+repo backend. Khi CI hoàn tất, review PR `release-be-service-main` ở repo
+manifest và merge sau khi checks pass. Argo tự triển khai cả ba môi trường.
+
+```bash
+bash scripts/check.sh
 bash scripts/local-dev.sh status
-bash scripts/local-dev.sh check
 ```
 
-`up` dựng hạ tầng, build/import image, tạo sealed secret theo controller,
-render manifest và publish Git snapshot nội bộ trên `main`. Argo CD theo dõi
-snapshot này và triển khai từng overlay. Lệnh chỉ báo PASS sau khi kiểm tra
-revision, trạng thái Argo, image runtime, replica, `/healthz` và `/version`.
+`deploy.sh` chỉ xác nhận cấu hình bootstrap; `check.sh` mới xác nhận rollout.
+Nếu source vẫn là image `bootstrap` trước release đầu, Application có thể chưa
+Healthy; cần merge PR digest đầu tiên. Không bỏ qua lỗi rollout hoặc image pull.
 
-Source chỉ chứa cấu hình chung; không chứa mật khẩu, ciphertext của cluster,
-đường dẫn máy hoặc tài khoản. Sealed secret và Argo Applications được sinh
-trong `.local/`. Mật khẩu được truyền qua stdin; private key controller
-không được xuất ra máy. Manifest bootstrap phải qua launcher trước khi deploy.
+Sealed secret được sinh trong `.local/bootstrap/secrets`, không đưa vào repo
+manifest dùng chung. Bootstrap apply nó vào cluster để controller tạo Secret;
+Deployment trong Git chỉ chứa `secretKeyRef`. Private key controller không được
+xuất ra máy. Chạy lại render tái sử dụng ciphertext nếu controller còn giải mã được.
 
-Sau khi sửa source trên `main`, chạy lại `up`. Cả ba môi trường local nhận
-cùng image mới. Ciphertext hợp lệ được tái sử dụng. Launcher không commit/push
-source và không thao tác với các nhánh môi trường trên GitHub.
-
-```mermaid
-flowchart LR
-    S[Source main] --> L[local-dev.sh up]
-    L --> I[Build image and import into k3d]
-    L --> G[Render manifests and secrets into local Git main]
-    G --> A[Argo CD sync]
-    I --> K[Kubernetes]
-    A --> K
-    K --> D[dev: 1 replica]
-    K --> T[staging: 2 replicas]
-    K --> P[prod: 3 replicas]
-```
+`bash scripts/local-dev.sh up` chỉ gọi `setup → render → deploy`, không yêu cầu
+build hay merge PR. Sau khi đã có release trên GitHub, bootstrap và `check.sh`
+là đủ để dựng máy khác, với CI/image phù hợp kiến trúc máy đó.
 
 ## Truy cập
 
-Với env mặc định:
+Với port mặc định:
 
 | Dịch vụ | URL |
 | --- | --- |
@@ -105,54 +142,169 @@ Với env mặc định:
 | staging | http://staging.127.0.0.1.nip.io:8088/ |
 | prod | http://prod.127.0.0.1.nip.io:8088/ |
 
-Backend có `/healthz` và `/version`. Đổi port trong URL nếu env khác mặc định.
-Hostname `nip.io` cần DNS; CLI kiểm tra bằng loopback và Host header.
+Backend có `/healthz` và `/version`. Đổi port theo env. Hostname `nip.io` cần DNS;
+script check dùng loopback và Host header.
 
-Argo CD dùng tài khoản `admin`. Lấy mật khẩu ban đầu trong terminal:
+Lấy mật khẩu ban đầu của tài khoản Argo `admin` trong Terminal:
 
 ```bash
-CONTEXT=$(python3 -c 'from scripts.local_dev import load_config; print("k3d-" + load_config()["CLUSTER_NAME"])')
+source scripts/local-common.sh
+load_config
 kubectl --context "$CONTEXT" -n argocd get secret argocd-initial-admin-secret \
   -o jsonpath='{.data.password}' | base64 --decode
 ```
+
+## Kịch bản demo: hai PR và ba môi trường tự động
+
+Chuẩn bị hạ tầng, CI Variables/Secrets và release đầu như phần dựng lần đầu.
+Mở Actions backend, PR manifest, Argo CD và ba giao diện ứng dụng.
+Dùng cùng Terminal Bash, bắt đầu ở thư mục `gitops-manifests`.
+
+### 1. Ghi nhận bản đang chạy
+
+```bash
+bash scripts/check.sh
+cd ../be-service
+git switch main
+git pull --ff-only origin main
+git status --short
+```
+
+Backend phải sạch trước khi tạo nhánh. Chỉ ra ba Application đều
+`Synced/Healthy`, replica 1/2/3, version/commit giống nhau.
+
+### 2. Tạo PR backend
+
+Chọn tên nhánh chưa tồn tại:
+
+```bash
+git switch -c feature/demo-ui
+```
+
+Trong `main.go`, hàm `handleRoot`, đổi tiêu đề `ServiceName` thành
+`Backend API Service - Demo Release` (chọn chữ khác nếu đã dùng trước đó).
+Tăng patch version trong `VERSION`, ví dụ `v1.3.0` → `v1.3.1`, phù hợp version
+đang có trong repo. Không thay đổi secret hoặc cấu hình các môi trường.
+
+```bash
+gofmt -w main.go
+bash scripts/check-quality.sh
+git diff --check
+git diff -- main.go VERSION
+git add main.go VERSION
+git commit -m "feat: update service title for automated release demo"
+git push -u origin feature/demo-ui
+gh pr create --base main --head feature/demo-ui \
+  --title "Demo: automatic release to three environments" \
+  --body "Change the title and version to demonstrate the GitHub Actions and Argo CD release flow."
+gh pr checks feature/demo-ui --watch
+```
+
+Review diff và CI trước khi merge. Chưa merge thì ba môi trường vẫn chạy bản cũ.
+
+### 3. Merge PR backend và quan sát CI
+
+```bash
+gh pr merge feature/demo-ui --merge
+DEMO_MERGE_COMMIT=$(gh pr view feature/demo-ui --json mergeCommit --jq '.mergeCommit.oid')
+git switch main
+git pull --ff-only origin main
+```
+
+Mở Actions: merge tự chạy quality → build → scan → push GHCR → ký/attest →
+tạo PR `release-be-service-main` trong repo manifest. Không chạy `build.sh`,
+`render.sh` hoặc `deploy.sh` cho release này. Chờ đúng run của merge commit
+hoàn tất; nếu CI thất bại thì chưa có release đủ điều kiện.
+
+Lời dẫn: “Merge backend tự tạo artifact đã kiểm tra. CI đề xuất digest trong
+repo manifest; cluster vẫn dùng trạng thái đã merge trước đó.”
+
+### 4. Merge PR manifest và quan sát Argo auto-sync
+
+```bash
+cd ../gitops-manifests
+source scripts/local-common.sh
+load_config
+gh pr list --repo "$CONFIG_REPO" --head release-be-service-main
+gh pr view release-be-service-main --repo "$CONFIG_REPO" --web
+gh pr checks release-be-service-main --repo "$CONFIG_REPO" --watch
+```
+
+Review PR: chỉ cập nhật image digest ở base Kustomize, có source commit và
+link CI. Kiểm tra source commit đúng PR backend vừa merge và checks pass.
+
+```bash
+gh pr merge release-be-service-main --repo "$CONFIG_REPO" --merge
+```
+
+Giữ trang Argo mở: Application phát hiện GitHub main đổi, tự sync và rollout.
+Refresh dev/staging/prod để thấy tiêu đề/version mới. Không chạy script deploy.
+Có thể chỉ quan sát Argo chờ poll; `check.sh` yêu cầu refresh rồi đợi và kiểm chứng:
+
+```bash
+bash scripts/check.sh
+```
+
+Kết quả: ba Application `Synced/Healthy`, cùng digest và source commit mới,
+replica giữ 1/2/3. Revision Argo là commit repo manifest; `/version.git_commit`
+là commit backend, nên hai SHA khác nhau là đúng.
+
+Lời dẫn: “Merge PR manifest cập nhật trạng thái mong muốn trong Git.
+Argo tự đồng bộ ba môi trường; máy này không build hoặc import image thủ công.”
+
+### 5. Rollback cũng qua hai PR
+
+Giữ `DEMO_MERGE_COMMIT` của bước 3; nếu đổi Terminal, lấy đúng SHA merge backend.
+Tạo nhánh rollback từ main, revert merge rồi tăng patch version mới trong
+`VERSION` để rollback có version riêng và dễ truy vết:
+
+```bash
+cd ../be-service
+git switch main
+git pull --ff-only origin main
+git switch -c rollback/demo-ui
+git show --stat "$DEMO_MERGE_COMMIT"
+git revert -m 1 --no-edit "$DEMO_MERGE_COMMIT"
+# Sửa VERSION thành patch version mới trước khi chạy tiếp
+bash scripts/check-quality.sh
+git add VERSION
+git commit -m "chore: version the rollback release"
+git push -u origin rollback/demo-ui
+gh pr create --base main --head rollback/demo-ui \
+  --title "Demo: rollback service title" --body "Restore the previous title through a new release."
+gh pr checks rollback/demo-ui --watch
+gh pr merge rollback/demo-ui --merge
+```
+
+CI tự phát hành image rollback và tạo PR manifest. Review/merge PR đó như
+bước 4; Argo tự đưa giao diện về tiêu đề cũ. Không sửa Deployment trực tiếp.
 
 ## Xóa và dựng lại
 
 ```bash
 bash scripts/local-dev.sh down
-bash scripts/local-dev.sh up
+bash scripts/setup.sh
+bash scripts/render.sh
+bash scripts/deploy.sh
+bash scripts/check.sh
 ```
 
-`down` xóa cluster được chọn trong env và giữ `.local/`. Khi controller mới
-không giải mã được ciphertext cũ, launcher tạo lại secret. Khi chuyển máy,
-clone source và tạo env mới; không mang `.env.local` hoặc `.local/` theo.
+`down` xóa cluster chọn trong env, giữ runtime/env trên máy. Controller mới
+không giải mã ciphertext cũ thì render tạo lại. Máy mới chỉ clone source và tạo
+env riêng, không mang `.env.local`, `.local` hoặc private key theo.
+Nếu image trên GitHub chưa phù hợp kiến trúc máy mới, cấu hình lại `IMAGE_ARCH`
+và phát hành qua CI trước khi check.
 
-## Kiểm tra và xử lý lỗi
+## Kiểm tra source và xử lý lỗi
 
 ```bash
 bash scripts/validate-manifests.sh
 python3 -m unittest discover -s scripts/tests
 ```
 
-Kiểm tra source cần thêm `jq`. Nếu dựng thất bại, kiểm tra `docker info`,
-`local-dev.sh status` và Application conditions. Dùng context `k3d-<CLUSTER_NAME>`
-để xem pod/event bằng kubectl. Không bỏ qua lỗi rollout hoặc timeout.
-
-## CI hosted tùy chọn
-
-CI manifest kiểm tra `main`. Backend CI mặc định test/build/scan; phát hành
-GHCR, ký/provenance và PR image vào `main` chỉ bật khi cấu hình CI env:
-
-| Repo | Variable/secret | Chức năng |
-| --- | --- | --- |
-| Backend | `ENABLE_GITOPS_RELEASE=true` | Bật phát hành và PR config |
-| Backend | `CONFIG_REPO` | Repository manifest nhận PR |
-| Backend | `IMAGE_ARCH` | `amd64` hoặc `arm64`, mặc định amd64 |
-| Backend | secret `CONFIG_REPO_PAT` | Quyền tạo PR tại repo manifest |
-| Manifest | `SOURCE_REPO` | Repository backend dùng để verify |
-| Manifest | `IMAGE` | Image GHCR được phép |
-| Manifest | secret `CONFIG_REPO_PAT` | Quyền đọc package/provenance khi verify |
-
-Giá trị tài khoản/repository và token được đặt trong GitHub Variables/Secrets,
-không viết vào source. Cluster hosted cần Argo source/credentials và secret
-được cấu hình riêng theo cluster. Flow local không tự kết nối cluster tới GitHub.
+Khi source đang có digest thực, đặt biến `IMAGE` theo GitHub Variables trước
+khi validate. Nếu chưa có PR manifest, xem backend Actions và secret/variable;
+ếu Argo lỗi repo, xem repository credential; nếu pod `ImagePullBackOff`, kiểm
+tra GHCR quyền pull và kiến trúc. Xem Application conditions/pod events bằng
+context `k3d-<CLUSTER_NAME>`. Không dùng Git nội bộ hoặc build local để thay thế
+một release CI đang lỗi.
