@@ -190,6 +190,19 @@ tạo provenance, nhưng dừng khi installer Cosign cũ không xác minh đư�
 key; image này chưa được chấp nhận làm release. Cập nhật installer chính
 thức v4.1.2 và Cosign v3.1.3 cho backend và GitOps rồi chạy lại pipeline.
 
+Bản sửa Cosign đã merge ở config PR#2 (0e3f833) và BE PR#2 (4a8fcb9).
+BE main run37391394498 PASS toàn bộ quality/build/scan/publish/sign và mở
+config PR#3 vào dev cho v1.3.0. Digest:
+`sha256:9f919a9f8409643a6069ab12575d59a942d61c9aa16735249cd156387e90a97d`.
+Xác minh độc lập OCI source/version/revision, provenance từ BE main và
+Cosign signer PASS. PR Dev cũng mang installer mới để staging/prod nhận
+bản sửa qua merge. Fixture test connect được sửa để không phụ thuộc image
+của checkout; cả 38 test PASS trên release digest.
+
+PR#3 chưa merge khi chưa hoàn tất check validate. Chưa connect Argo hoặc
+promote staging/prod. Chỉ merge PR Dev sau validate PASS; sau đó tiếp tục
+bước7–8 và check mỗi môi trường, không bỏ qua branch protection.
+
 Repo config vẫn chưa có CONFIG_REPO_PAT ở lần kiểm tra gần nhất. Đây là
 credential Actions riêng, không tự có sau gh auth refresh. Hoàn tất bước2
 để release PR validation và promotion có thể xác minh artifact.
@@ -199,3 +212,5 @@ Links evidence:
 - Backend PR: https://github.com/namnd74/be-service/pull/1
 - BE CI PR PASS: https://github.com/namnd74/be-service/actions/runs/37390284792
 - BE CI main: https://github.com/namnd74/be-service/actions/runs/37390533546
+- BE CI signed release PASS: https://github.com/namnd74/be-service/actions/runs/37391394498
+- Dev release PR: https://github.com/namnd74/gitops-manifests/pull/3
