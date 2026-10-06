@@ -131,6 +131,7 @@ Review CI evidence và merge Dev PR:
 gh run list --repo namnd74/be-service --workflow ci.yaml --limit 3
 cd /Volumes/MacOs/workspaces/git-ops/gitops-manifests
 bash scripts/demo.sh connect
+kubectl --context k3d-gitops-demo -n argocd wait --for=jsonpath='{.status.health.status}'=Healthy application/be-service-dev --timeout=60s
 bash scripts/demo.sh check dev
 ```
 
@@ -149,10 +150,12 @@ Review PR rồi Create a merge commit. Sau merge:
 
 ```bash
 bash scripts/demo.sh connect
+kubectl --context k3d-gitops-demo -n argocd wait --for=jsonpath='{.status.health.status}'=Healthy application/be-service-staging --timeout=60s
 bash scripts/demo.sh check staging
 gh workflow run promote.yaml --repo namnd74/gitops-manifests --ref main -f from=staging -f to=prod
 # Review/merge PR staging → prod:
 bash scripts/demo.sh connect
+kubectl --context k3d-gitops-demo -n argocd wait --for=jsonpath='{.status.health.status}'=Healthy application/be-service-prod --timeout=60s
 bash scripts/demo.sh check prod
 ```
 
@@ -168,7 +171,24 @@ image digest, replica/pod readiness, OCI source/version và /version HTTP.
 Lưu revision tốt theo nhánh. Fault, drift và rollback qua PR được mô tả trong
 [runbook](demo-runbook.md).
 
-## Kết quả và điểm còn chờ
+Pod có thể rollout xong trước khi Argo cập nhật Healthy (đã gặp ở Staging).
+Nếu check báo Argo chưa Healthy, xem Application/Ingress/Deployment, chờ
+reconciliation rồi chạy lại check; không promote khi acceptance chưa PASS.
+
+Nếu Docker Desktop credential helper làm `imagetools inspect` đứng khi đọc
+image public, dùng config tạm không chứa credential, có đường dẫn plugin:
+
+```bash
+mkdir -p /private/tmp/gitops-docker-public
+cat > /private/tmp/gitops-docker-public/config.json <<'JSON'
+{"cliPluginsExtraDirs":["/Applications/Docker.app/Contents/Resources/cli-plugins"]}
+JSON
+DOCKER_CONFIG=/private/tmp/gitops-docker-public bash scripts/demo.sh connect
+DOCKER_CONFIG=/private/tmp/gitops-docker-public bash scripts/demo.sh check dev
+# check staging/prod tương tự; chỉ áp dụng cho image public của lab.
+```
+
+## Kết quả đã xác minh ngày 06/10/2026
 
 Hạ tầng đã dựng: Docker29.4.0, ba node Ready, ingress/Sealed Secrets1/1 và
 bảy pod Argo1/1; HTTP/HTTPS localhost200. Credential đã seal lại cho ba môi
@@ -177,7 +197,6 @@ promotion/rollback/branch snapshots đã chạy lại: 38 test GitOps và 8 test
 script BE PASS; actionlint ở cả hai repo và ba overlay đều PASS. Test Git
 thực hiện hai chu kỳ merge release, giữ đúng replica và ciphertext.
 
-Chưa có backend/Argo Applications live và chưa xác minh release CI thực tế.
 CLI namnd74 đã được cấp quyền workflow. Cấu hình GitOps PR#1 đã merge vào
 main (f6d9df1), ba remote branch dev/staging/prod đã tạo từ commit này và
 đều bắt buộc check validate từ GitHub Actions, áp dụng cả admin. Repo chỉ
@@ -199,13 +218,21 @@ Cosign signer PASS. PR Dev cũng mang installer mới để staging/prod nhận
 bản sửa qua merge. Fixture test connect được sửa để không phụ thuộc image
 của checkout; cả 38 test PASS trên release digest.
 
-PR#3 chưa merge khi chưa hoàn tất check validate. Chưa connect Argo hoặc
-promote staging/prod. Chỉ merge PR Dev sau validate PASS; sau đó tiếp tục
-bước7–8 và check mỗi môi trường, không bỏ qua branch protection.
+CONFIG_REPO_PAT đã được thêm vào repo config. Validation PR Dev chạy lại
+PASS; các workflow promotion, validation và review đều PASS trước merge.
+Ba Application đã connect và kiểm tra live PASS: nhánh/revision Git đúng,
+Synced/Healthy, đủ replica, runtime digest đúng, /healthz 200 và /version
+khớp v1.3.0, source SHA 4a8fcb9313628bbf5a3f800c59aeae295d0cdd29 và env.
 
-Repo config vẫn chưa có CONFIG_REPO_PAT ở lần kiểm tra gần nhất. Đây là
-credential Actions riêng, không tự có sau gh auth refresh. Hoàn tất bước2
-để release PR validation và promotion có thể xác minh artifact.
+| Môi trường | Merge PR | Revision tốt của config | Pod Ready | Acceptance |
+|---|---|---|---|---|
+| Dev | [#3](https://github.com/namnd74/gitops-manifests/pull/3) | 6d5d87313f3a68076500474041356a84e65e616c | 1/1 | PASS |
+| Staging | [#5](https://github.com/namnd74/gitops-manifests/pull/5) | 7bdef055a596bb7cd3a855bb36072485aac1d276 | 2/2 | PASS |
+| Prod | [#6](https://github.com/namnd74/gitops-manifests/pull/6) | 4f907193382bc8a7eea0430a4b9925ed51471b98 | 3/3 | PASS |
+
+Một vòng merge release thực tế đã hoàn tất dev → staging → prod, không
+rebuild artifact khi promote, giữ nguyên env patch/ingress/Argo/ciphertext.
+Fault/drift/rollback chưa chạy live trong vòng này; dùng runbook khi demo.
 
 Links evidence:
 - Config PR: https://github.com/namnd74/gitops-manifests/pull/1
@@ -214,3 +241,5 @@ Links evidence:
 - BE CI main: https://github.com/namnd74/be-service/actions/runs/37390533546
 - BE CI signed release PASS: https://github.com/namnd74/be-service/actions/runs/37391394498
 - Dev release PR: https://github.com/namnd74/gitops-manifests/pull/3
+- Dev → Staging workflow PASS: https://github.com/namnd74/gitops-manifests/actions/runs/37392727175
+- Staging → Prod workflow PASS: https://github.com/namnd74/gitops-manifests/actions/runs/37393046286
