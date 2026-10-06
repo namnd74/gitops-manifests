@@ -143,6 +143,65 @@ fi
         self.assertNotIn('variable set',calls.read_text())
         self.assertNotIn('workflow run',calls.read_text())
 
+    def test_check_matches_github_digest_commit_and_rejects_wrong_runtime(self):
+        digest = 'sha256:'+'a'*64
+        image = 'ghcr.io/example/be-service@'+digest
+        subprocess.run(['kustomize','edit','set','image','ghcr.io/example/be-service='+image],
+                       cwd=self.root/'apps/be-service/base',check=True)
+        for args in (['config','user.name','Fixture'],['config','user.email','fixture@example.invalid'],
+                     ['config','commit.gpgsign','false'],['add','apps'],['commit','-qm','release'],['branch','-M','main']):
+            subprocess.run(['git','-C',str(self.root),*args],check=True)
+        revision=subprocess.check_output(['git','-C',str(self.root),'rev-parse','HEAD'],text=True).strip()
+        real_git=shutil.which('git')
+        self.fixture('git', '''
+if [[ " $* " == *' clone '* ]]; then
+  exec "$REAL_GIT" clone --quiet --branch main "$FIXTURE_REPO" "${!#}"
+fi
+exec "$REAL_GIT" "$@"
+''')
+        self.fixture('docker', '''
+if [[ "$1" == buildx ]]; then
+  jq -n '{config:{Labels:{"org.opencontainers.image.version":"v1.3.1","org.opencontainers.image.revision":("b"*40)}}}'
+else
+  jq -n '{status:{id:("sha256:"+("d"*64)),repoDigests:[("ghcr.io/example/be-service@sha256:"+("a"*64))]}}'
+fi
+''')
+        self.fixture('kubectl', '''
+namespace=''
+while (($#)); do
+  case "$1" in
+    -n) namespace=$2; shift 2 ;;
+    annotate) exit 0 ;;
+    get) kind=$2; if [[ "$kind" == application ]]; then namespace=${3#be-service-}; fi; break ;;
+    *) shift ;;
+  esac
+done
+case "$kind" in
+application) jq -n --arg env "$namespace" --arg revision "$REVISION" '{spec:{source:{repoURL:"https://github.com/example/gitops-manifests.git",targetRevision:"main",path:("apps/be-service/envs/"+$env)},destination:{namespace:$env}},status:{sync:{status:"Synced",revision:$revision},health:{status:"Healthy"}}}' ;;
+deployment) jq -n --arg env "$namespace" '{spec:{replicas:({dev:1,staging:2,prod:3}[$env]),template:{spec:{containers:[{image:("ghcr.io/example/be-service@sha256:"+("a"*64))}]}}}}' ;;
+pods) jq -n --arg env "$namespace" --arg id "${POD_ID:-d}" '{items:[range({dev:1,staging:2,prod:3}[$env]) | {metadata:{},spec:{nodeName:"node-1",containers:[{image:("ghcr.io/example/be-service@sha256:"+("a"*64))}]},status:{containerStatuses:[{ready:true,imageID:("containerd://sha256:"+($id*64))}]}}]}' ;;
+esac
+''')
+        self.fixture('curl', '''
+if [[ "$*" == *'/version'* ]]; then
+  while (($#)); do if [[ "$1" == -H ]]; then host=$2; break; fi; shift; done
+  host=${host#Host: }; env=${host%%.*}
+  jq -n --arg env "$env" '{env:$env,version:"v1.3.1",git_commit:("b"*40)}'
+else echo OK; fi
+''')
+        self.env.update(REAL_GIT=real_git,FIXTURE_REPO=str(self.root),REVISION=revision)
+        result=self.run_script('check.sh')
+        self.assertEqual(result.returncode,0,result.stderr)
+        for env in ('dev','staging','prod'):
+            self.assertIn('[PASS] '+env,result.stdout)
+        release=json.loads((self.root/'.local/release.json').read_text())
+        self.assertEqual(release['image'],image)
+        self.assertEqual(release['revision'],revision)
+        self.assertEqual(release['source_sha'],'b'*40)
+        result=self.run_script('check.sh',POD_ID='c')
+        self.assertNotEqual(result.returncode,0)
+        self.assertIn('runtime image content mismatch',result.stderr)
+
     def test_up_stops_after_failed_step(self):
         calls = self.root/'calls'
         for step in ('setup','build','render','deploy','check'):
