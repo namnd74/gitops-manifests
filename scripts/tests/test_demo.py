@@ -33,6 +33,10 @@ class ConnectTest(unittest.TestCase):
         self.repo = self.path/'repo'
         for name in ('scripts', 'apps', 'argocd'):
             shutil.copytree(ROOT/name, self.repo/name)
+        # Fixtures must not inherit whichever release the checkout currently uses.
+        subprocess.run(['kustomize', 'edit', 'set', 'image',
+                        'ghcr.io/namnd74/be-service=ghcr.io/namnd74/be-service:sha-9912c6b'],
+                       cwd=self.repo/'apps/be-service/base', check=True)
         self.bin = self.path/'bin'
         self.bin.mkdir()
         self.calls = self.path/'calls'
@@ -55,8 +59,9 @@ class ConnectTest(unittest.TestCase):
             file.chmod(0o755)
 
     def digest(self, env, character):
-        file = self.snapshots/env/'apps/be-service/base/kustomization.yaml'
-        file.write_text(file.read_text().replace('newTag: sha-9912c6b', 'digest: sha256:'+character*64))
+        subprocess.run(['kustomize', 'edit', 'set', 'image',
+                        'ghcr.io/namnd74/be-service=ghcr.io/namnd74/be-service@sha256:'+character*64],
+                       cwd=self.snapshots/env/'apps/be-service/base', check=True)
 
     def connect(self):
         return subprocess.run(['bash', str(self.repo/'scripts/demo.sh'), 'connect'], env=self.env, capture_output=True, text=True)
