@@ -13,6 +13,6 @@ labels:
     app.kubernetes.io/part-of: gitops-demo
 
 images:
-- digest: sha256:10a2c5b196eb7a6aef31456091e4fd39912387ad946c93e827064e5281a44ad9
+- digest: sha256:aca7a65ed156f8361a53cca1716483ddac1e345bd414501c6d89faac71a8ff3b
   name: ghcr.io/example/be-service
   newName: ghcr.io/namnd74/be-service
