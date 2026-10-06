@@ -1,4 +1,6 @@
 .demo/
+.local/
+.env.local
 bin/
 coverage.out
 *.test

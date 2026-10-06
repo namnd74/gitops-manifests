@@ -1,9 +1,11 @@
 #!/usr/bin/env bash
-# Verify immutable artifact identity before opening a promotion or rollback PR.
+# Verify immutable artifact identity before accepting a hosted release PR on its environment branch.
 set -euo pipefail
-[[ $# -eq 2 ]] || { echo "Usage: $0 IMAGE@sha256:DIGEST OWNER/REPO" >&2; exit 2; }
+[[ $# -eq 3 ]] || { echo "Usage: $0 IMAGE@sha256:DIGEST OWNER/REPO dev|stg|prod" >&2; exit 2; }
 REF=$1
 SOURCE_REPO=$2
+SOURCE_BRANCH=$3
+[[ "$SOURCE_BRANCH" =~ ^(dev|stg|prod)$ ]] || exit 2
 [[ "$SOURCE_REPO" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]] || exit 2
 IMAGE_REPO=$(printf '%s' "$SOURCE_REPO" | tr '[:upper:]' '[:lower:]')
 [[ "$REF" == "ghcr.io/$IMAGE_REPO@sha256:"* && "${REF##*@}" =~ ^sha256:[0-9a-f]{64}$ ]] || {
@@ -19,9 +21,9 @@ source=$(jq -er '.config.Labels["org.opencontainers.image.source"]' <<< "$config
 }
 gh attestation verify "oci://$REF" --repo "$SOURCE_REPO" \
   --signer-workflow "$SOURCE_REPO/.github/workflows/ci.yaml" \
-  --source-digest "$source_sha" --source-ref refs/heads/main \
+  --source-digest "$source_sha" --source-ref "refs/heads/$SOURCE_BRANCH" \
   --cert-oidc-issuer https://token.actions.githubusercontent.com
-cosign verify --certificate-identity "https://github.com/$SOURCE_REPO/.github/workflows/ci.yaml@refs/heads/main" \
+cosign verify --certificate-identity "https://github.com/$SOURCE_REPO/.github/workflows/ci.yaml@refs/heads/$SOURCE_BRANCH" \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com "$REF"
 if [[ -n "${GITHUB_OUTPUT:-}" ]]; then
   printf 'image_ref=%s\nsource_sha=%s\nversion=%s\n' "$REF" "$source_sha" "$version" >> "$GITHUB_OUTPUT"

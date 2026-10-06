@@ -3,11 +3,3 @@ kind: Deployment
 metadata: {name: be-service}
 spec:
   replicas: 3
-  template:
-    spec:
-      containers:
-      - name: app
-        env:
-        - {name: APP_ENV, value: prod}
-        - {name: DEMO_MODE, value: "false"}
-        - {name: DEMO_FAULT, value: "false"}

@@ -12,4 +12,7 @@ patches:
   - path: deployment-env-patch.yaml
 resources:
   - ../../base
-  - sealed-secret.yaml
+configMapGenerator:
+  - name: be-service-config
+    envs:
+      - environment.env
