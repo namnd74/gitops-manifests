@@ -68,7 +68,7 @@ class ManifestTest(unittest.TestCase):
 
     def test_readiness_failure_requires_explicit_prod_seminar_marker(self):
         path = 'apps/be-service/envs/prod/deployment-env-patch.yaml'
-        self.edit(path, '.spec.template.spec.containers[0].name = "app" | .spec.template.spec.containers[0].readinessProbe.httpGet.port = 8081')
+        self.edit(path, 'del(.metadata.annotations."seminar.gitops.io/scenario") | .spec.template.spec.containers[0].name = "app" | .spec.template.spec.containers[0].readinessProbe.httpGet.port = 8081')
         self.assertNotEqual(self.validate().returncode, 0)
         self.edit(path, '.metadata.annotations."seminar.gitops.io/scenario" = "prod-readiness-failure"')
         result = self.validate()
